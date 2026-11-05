@@ -1,0 +1,41 @@
+//
+// examples/02_receivers_and_mutability.fl
+// Implementation unit corresponding to examples/02_receivers_and_mutability.fo
+//
+
+module examples::receivers_and_mutability;
+
+#import std::core;
+
+// 1. Explicit Immutable Receiver (Query / Read-only borrow)
+fn ByteBuffer::length(this const& self) -> usize {
+    return self.len;
+}
+
+// 2. Explicit Mutable Receiver (In-place mutation, no 'mut' keyword)
+fn ByteBuffer::append(this &self, byte: u8) -> bool {
+    if (self.len >= self.capacity) {
+        return false;
+    }
+    self.len = self.len + 1;
+    return true;
+}
+
+// 3. Explicit Consuming Receiver (Ownership transfer / destructive move)
+fn ByteBuffer::destroy(this self) {
+    // Destructive move consumes self
+    return;
+}
+
+// Reference and Pointer Mutability in Free Functions
+fn copy_memory(dst: *u8, src: const* u8, length: usize) {
+    // dst is a mutable raw pointer (*u8)
+    // src is an immutable raw pointer (const* u8)
+    return;
+}
+
+fn mutate_span(target: &Span<u8>, source: const& Span<u8>) {
+    // target is a mutable reference (&Span<u8>)
+    // source is an immutable reference (const& Span<u8>)
+    return;
+}

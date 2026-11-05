@@ -1,0 +1,9 @@
+module std::async::epoll_ffi;
+
+@target(os = "linux")
+@extern("C", link_name = "epoll_create1")
+fn epoll_create1(flags: i32) -> i32;
+
+@target(os = "linux")
+@extern("C", link_name = "epoll_ctl")
+fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *void) -> i32;

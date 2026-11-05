@@ -1,0 +1,31 @@
+module std::net;
+#import std::net::ffi;
+
+fn TcpSocket::open() -> TcpSocket {
+    var fd = ffi::sys_socket(2 /*AF_INET */, 1 /* SOCK_STREAM*/, 0);
+    return TcpSocket { fd: fd, connected: false };
+}
+
+fn TcpSocket::connect(this &self, ip: StringView, port: u16) -> bool {
+    var res = ffi::sys_connect(self.fd, ip.bytes, port);
+    self.connected = (res == 0);
+    return self.connected;
+}
+
+fn TcpSocket::send(this &self, data: const& Span<u8>) -> isize {
+    if !self.connected { return -1; }
+    return ffi::sys_send(self.fd, data.ptr, data.length);
+}
+
+fn TcpSocket::receive(this &self, buffer: &Span<u8>) -> isize {
+    if !self.connected { return -1; }
+    return ffi::sys_recv(self.fd, buffer.ptr, buffer.length);
+}
+
+fn TcpSocket::close(this &self) {
+    if self.fd >= 0 {
+        ffi::sys_close(self.fd);
+        self.fd = -1;
+        self.connected = false;
+    }
+}

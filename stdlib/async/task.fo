@@ -1,0 +1,13 @@
+module std::async;
+
+class TaskHandle {
+    id: u64;
+    completed: bool;
+
+    fn cancel(this &self);
+}
+
+class TaskScheduler {
+    fn spawn(task_id: u64);
+    fn run_ready();
+}

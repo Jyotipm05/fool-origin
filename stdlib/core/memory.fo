@@ -1,0 +1,17 @@
+module std::core;
+
+class RawMemory {
+    fn copy(dest: *u8, src: const* u8, bytes: usize);
+    fn set(dest: *u8, value: u8, bytes: usize);
+}
+
+class ArenaAllocator {
+    buffer: *u8;
+    capacity: usize;
+    offset: usize;
+
+    fn create(capacity: usize) -> ArenaAllocator;
+    fn allocate(this &self, bytes: usize, align: usize = 8) -> *u8;
+    fn reset(this &self);
+    fn destroy(this self);
+}

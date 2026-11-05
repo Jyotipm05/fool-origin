@@ -1,0 +1,126 @@
+{
+  "Module Declaration": {
+    "prefix": "module",
+    "body": [
+      "module ${1:std}::${2:subsystem};",
+      ""
+    ],
+    "description": "Declare a Fool module identifier"
+  },
+  "Module Import": {
+    "prefix": "import",
+    "body": [
+      "#import ${1:std}::${2:core};"
+    ],
+    "description": "Import a Fool module with #import"
+  },
+  "Compile-Time Constant (constx)": {
+    "prefix": "constx",
+    "body": [
+      "constx ${1:NAME}: ${2:usize} = ${3:4096};"
+    ],
+    "description": "Declare a compile-time evaluated constant (C++ constexpr / Rust const)"
+  },
+  "Immutable Binding": {
+    "prefix": "const",
+    "body": [
+      "const ${1:name} = ${2:value};"
+    ],
+    "description": "Declare an immutable variable binding (Rust-like strict immutability)"
+  },
+  "Mutable Variable": {
+    "prefix": "var",
+    "body": [
+      "${1:name} = ${2:value};"
+    ],
+    "description": "Declare a mutable variable (mutable by default)"
+  },
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:i32} {",
+      "\t${0:return 0;}",
+      "}"
+    ],
+    "description": "Declare a Fool function"
+  },
+  "Async Function": {
+    "prefix": "asyncfn",
+    "body": [
+      "async fn ${1:name}(${2:params}) -> ${3:i32} {",
+      "\t${0:return 0;}",
+      "}"
+    ],
+    "description": "Declare an asynchronous function"
+  },
+  "Method (Mutable Receiver)": {
+    "prefix": "method_mut",
+    "body": [
+      "fn ${1:Class}::${2:method}(this &self${3:, params}) -> ${4:bool} {",
+      "\t${0:return true;}",
+      "}"
+    ],
+    "description": "Declare a method with explicit mutable receiver (this &self)"
+  },
+  "Method (Immutable Receiver)": {
+    "prefix": "method_const",
+    "body": [
+      "fn ${1:Class}::${2:method}(this const& self${3:, params}) -> ${4:usize} {",
+      "\t${0:return self.len;}",
+      "}"
+    ],
+    "description": "Declare a method with explicit immutable receiver (this const& self)"
+  },
+  "Method (Consuming Receiver)": {
+    "prefix": "method_move",
+    "body": [
+      "fn ${1:Class}::${2:destroy}(this self) {",
+      "\t${0:return;}",
+      "}"
+    ],
+    "description": "Declare a consuming method with ownership transfer (this self)"
+  },
+  "Ruleset": {
+    "prefix": "ruleset",
+    "body": [
+      "ruleset ${1:Equatable}<T> {",
+      "\tfn ${2:equals}(this const& self, other: const& T) -> bool;",
+      "}"
+    ],
+    "description": "Declare a nominal capability contract (ruleset)"
+  },
+  "Blueprint": {
+    "prefix": "blueprint",
+    "body": [
+      "blueprint ${1:Name}<${2:T}, ${3:N: usize = 4}> {",
+      "\tfn ${4:compute}(${5:params}) -> ${6:void};",
+      "}"
+    ],
+    "description": "Declare a compile-time monomorphized blueprint"
+  },
+  "Class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\t${2:field}: ${3:usize};",
+      "}"
+    ],
+    "description": "Declare a Fool class/struct"
+  },
+  "Target Pruning Attribute": {
+    "prefix": "target",
+    "body": [
+      "@target(os = \"${1|windows,linux,darwin,wasm|}\", arch = \"${2|x86_64,aarch64,wasm32|}\")"
+    ],
+    "description": "Compile-time Pass 0 target pruning attribute"
+  },
+  "Extern Foreign Binding": {
+    "prefix": "extern",
+    "body": [
+      "@extern(\"${1|C,llvm|}\", link_name = \"${2:symbol_name}\")",
+      "fn ${3:name}(${4:params}) -> ${5:void};"
+    ],
+    "description": "Declare a foreign ABI or LLVM intrinsic function binding"
+  }
+}
+

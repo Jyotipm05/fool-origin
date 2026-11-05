@@ -1,0 +1,17 @@
+module std::sys;
+
+@target(os = "posix")
+@extern("C", link_name = "exit")
+fn c_exit(code: i32) -> !;
+
+fn Process::exit(code: i32) -> ! {
+    c_exit(code);
+}
+
+fn Process::args_count() -> usize {
+    return 1;
+}
+
+fn Process::get_arg(index: usize) -> StringView {
+    return StringView::from_raw("fool_app", 8);
+}

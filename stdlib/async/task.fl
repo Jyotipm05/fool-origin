@@ -1,0 +1,13 @@
+module std::async;
+
+fn TaskHandle::cancel(this &self) {
+    self.completed = true;
+}
+
+fn TaskScheduler::spawn(task_id: u64) {
+    // Append to cooperative run queue
+}
+
+fn TaskScheduler::run_ready() {
+    // Poll loop over pending state machines
+}

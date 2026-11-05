@@ -1,0 +1,30 @@
+module std::io::win32_ffi;
+
+@target(os = "windows")
+@extern("C", link_name = "CreateFileA")
+fn CreateFileA(name: const*u8, acc: u32, share: u32, sec:*void, disp: u32, flags: u32, templ: *void) ->*void;
+
+@target(os = "windows")
+@extern("C", link_name = "ReadFile")
+fn ReadFile(h: *void, buf:*u8, len: u32, read: *u32, ov:*void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "WriteFile")
+fn WriteFile(h: *void, buf: const* u8, len: u32, written: *u32, ov:*void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "CloseHandle")
+fn CloseHandle(h: *void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "GetStdHandle")
+fn GetStdHandle(nStdHandle: u32) -> *void;
+
+module std::io::sys_file;
+
+@target(os = "windows")
+fn stdout_write(buf: const*u8, len: usize) {
+    var out_h = win32_ffi::GetStdHandle(0xFFFFFFF5); // STD_OUTPUT_HANDLE
+    var written: u32 = 0;
+    win32_ffi::WriteFile(out_h, buf, len as u32, &written, 0 as*void);
+}

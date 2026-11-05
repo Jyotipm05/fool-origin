@@ -1,0 +1,17 @@
+module std::sys;
+
+@target(os = "windows")
+@extern("C", link_name = "ExitProcess")
+fn c_ExitProcess(code: u32) -> !;
+
+fn Process::exit(code: i32) -> ! {
+    c_ExitProcess(code as u32);
+}
+
+fn Process::args_count() -> usize {
+    return 1;
+}
+
+fn Process::get_arg(index: usize) -> StringView {
+    return StringView::from_raw("fool_app.exe", 12);
+}

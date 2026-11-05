@@ -1,0 +1,24 @@
+module std::io::posix_ffi;
+
+@target(os = "posix")
+@extern("C", link_name = "open")
+fn c_open(path: const* u8, flags: i32, mode: i32) -> i32;
+
+@target(os = "posix")
+@extern("C", link_name = "read")
+fn c_read(fd: i32, buf: *u8, count: usize) -> isize;
+
+@target(os = "posix")
+@extern("C", link_name = "write")
+fn c_write(fd: i32, buf: const* u8, count: usize) -> isize;
+
+@target(os = "posix")
+@extern("C", link_name = "close")
+fn c_close(fd: i32) -> i32;
+
+module std::io::sys_file;
+
+@target(os = "posix")
+fn stdout_write(buf: const* u8, len: usize) {
+    posix_ffi::c_write(1, buf, len);
+}

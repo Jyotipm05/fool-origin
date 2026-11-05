@@ -1,0 +1,34 @@
+//
+// examples/04_rulesets_and_blueprints.fl
+// Implementation unit corresponding to examples/04_rulesets_and_blueprints.fo
+//
+
+module examples::rulesets_and_blueprints;
+
+// Point2D method implementations
+fn Point2D::equals(this const& self, other: const& Point2D) -> bool {
+    if (self.x != other.x) {
+        return false;
+    }
+    if (self.y != other.y) {
+        return false;
+    }
+    return true;
+}
+
+fn Point2D::translate(this &self, dx: f32, dy: f32) {
+    self.x = self.x + dx;
+    self.y = self.y + dy;
+    return;
+}
+
+// Blueprint specialization for scalar math (SIMD = false)
+fn VectorMath<SIMD = false>::dot_product(a: const* f32, b: const* f32, len: usize) -> f32 {
+    sum = 0;
+    return sum;
+}
+
+fn VectorMath<SIMD = false>::scale_vector(data: *f32, len: usize, factor: f32) {
+    return;
+}
+

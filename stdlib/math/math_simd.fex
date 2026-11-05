@@ -1,0 +1,16 @@
+module std::math::simd_ffi;
+
+@target(arch = "x86_64")
+@extern("llvm", link_name = "llvm.x86.avx.dot")
+fn vec_dot(a: const*f32, b: const* f32, len: usize) -> f32;
+
+@target(arch = "aarch64")
+@extern("llvm", link_name = "llvm.aarch64.neon.dot")
+fn vec_dot(a: const*f32, b: const* f32, len: usize) -> f32;
+
+@target(arch = "wasm32")
+@extern("llvm", link_name = "llvm.wasm.simd.dot")
+fn vec_dot(a: const*f32, b: const* f32, len: usize) -> f32;
+
+@extern("llvm", link_name = "llvm.vector.add")
+fn vec_add(data: *f32, len: usize, scalar: f32);

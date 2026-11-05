@@ -1,0 +1,20 @@
+module std::core;
+
+enum MemoryOrder {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
+
+class Atomic<T> {
+    value: T;
+
+    fn new(initial: T) -> Atomic<T>;
+    fn load(this const& self, order: MemoryOrder = MemoryOrder::SeqCst) -> T;
+    fn store(this &self, val: T, order: MemoryOrder = MemoryOrder::SeqCst);
+    fn compare_exchange(this &self, expected: T, desired: T, order: MemoryOrder = MemoryOrder::SeqCst) -> bool;
+    fn fetch_add(this &self, val: T, order: MemoryOrder = MemoryOrder::SeqCst) -> T;
+    fn exchange(this &self, desired: T, order: MemoryOrder = MemoryOrder::SeqCst) -> T;
+}

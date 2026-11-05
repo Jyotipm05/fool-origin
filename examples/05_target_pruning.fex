@@ -1,0 +1,36 @@
+//
+// examples/05_target_pruning.fex
+// Foreign ABI bindings and platform overlays evaluated in Pass 0.
+//
+
+module examples::target_pruning;
+
+// Directives (@) are strictly compile-time attributes, never expressions
+
+// Windows x86_64 target bindings
+@target(os = "windows", arch = "x86_64")
+@extern("C", link_name = "VirtualAlloc")
+fn win32_virtual_alloc(addr: *void, size: usize, alloc_type: u32, protect: u32) -> *void;
+
+@target(os = "windows")
+@extern("C", link_name = "VirtualFree")
+fn win32_virtual_free(addr: *void, size: usize, free_type: u32) -> i32;
+
+// Linux target bindings
+@target(os = "linux")
+@extern("C", link_name = "mmap")
+fn posix_mmap(addr: *void, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) -> *u8;
+
+@target(os = "linux")
+@extern("C", link_name = "munmap")
+fn posix_munmap(addr: *u8, length: usize) -> i32;
+
+// Architecture-specific LLVM intrinsics
+@target(arch = "x86_64")
+@extern("llvm", link_name = "llvm.x86.sse.pause")
+fn cpu_spin_pause();
+
+@target(arch = "aarch64")
+@extern("llvm", link_name = "llvm.aarch64.isb")
+fn arm_memory_barrier();
+

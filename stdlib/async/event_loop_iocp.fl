@@ -1,0 +1,9 @@
+module std::async;
+
+fn EventLoop::init() -> EventLoop {
+    return EventLoop { loop_fd: -1 };
+}
+
+fn EventLoop::poll_events(this &self, timeout_ms: i32) {
+    // Windows IOCP GetQueuedCompletionStatus
+}

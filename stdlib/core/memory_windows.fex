@@ -1,0 +1,19 @@
+module std::core::sys_mem;
+
+@target(os = "windows")
+@extern("C", link_name = "VirtualAlloc")
+fn c_VirtualAlloc(lpAddress: *void, dwSize: usize, flAllocationType: u32, flProtect: u32) ->*u8;
+
+@target(os = "windows")
+@extern("C", link_name = "VirtualFree")
+fn c_VirtualFree(lpAddress: *u8, dwSize: usize, dwFreeType: u32) -> i32;
+
+fn os_alloc_pages(bytes: usize) -> *u8 {
+    // MEM_COMMIT | MEM_RESERVE = 0x3000, PAGE_READWRITE = 0x04
+    return c_VirtualAlloc(0 as*void, bytes, 0x3000, 0x04);
+}
+
+fn os_free_pages(ptr: *u8, bytes: usize) {
+    // MEM_RELEASE = 0x8000
+    c_VirtualFree(ptr, 0, 0x8000);
+}

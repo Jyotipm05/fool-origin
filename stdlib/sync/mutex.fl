@@ -1,0 +1,37 @@
+module std::sync;
+#import std::sync::ffi;
+
+fn Mutex<T>::create(value: T) -> Mutex<T> {
+    return Mutex<T> {
+        state: Atomic<u32>::new(0),
+        data: value,
+    };
+}
+
+fn Mutex<T>::lock(this &self) -> MutexGuard<T> {
+    // Uncontended Fast-Path CAS
+    if self.state.compare_exchange(0, 1) {
+        return MutexGuard<T> { lock_ref: self };
+    }
+    // Slow path blocking wait
+    ffi::platform_wait(&self.state, 1);
+    return MutexGuard<T> { lock_ref: self };
+}
+
+fn Mutex<T>::unlock(this &self) {
+    if self.state.exchange(0) != 0 {
+        ffi::platform_wake(&self.state, 1);
+    }
+}
+
+fn MutexGuard<T>::get(this const& self) -> const& T {
+    return self.lock_ref.data;
+}
+
+fn MutexGuard<T>::get_mut(this &self) -> &T {
+    return self.lock_ref.data;
+}
+
+fn MutexGuard<T>::release(this self) {
+    self.lock_ref.unlock();
+}

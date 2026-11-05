@@ -1,0 +1,14 @@
+module std::sync;
+
+fn Channel<T>::create(capacity: usize) -> Channel<T> {
+    return Channel<T> { capacity: capacity };
+}
+
+fn Channel<T>::send(this &self, item: T) -> bool {
+    return true; // Simplified ring-buffer queue
+}
+
+fn Channel<T>::receive(this &self) -> T {
+    var item: T;
+    return item;
+}

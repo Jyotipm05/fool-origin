@@ -1,0 +1,22 @@
+//
+// examples/02_receivers_and_mutability.fo
+// Interface blueprint: classes, receiver declarations, and reference types.
+//
+
+module examples::receivers_and_mutability;
+
+#import std::core;
+
+class ByteBuffer {
+    data: *u8;
+    capacity: usize;
+    len: usize;
+
+    fn length(this const& self) -> usize;
+    fn append(this &self, byte: u8) -> bool;
+    fn destroy(this self);
+}
+
+fn copy_memory(dst: *u8, src: const* u8, length: usize);
+fn mutate_span(target: &Span<u8>, source: const& Span<u8>);
+

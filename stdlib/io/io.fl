@@ -1,0 +1,12 @@
+module std::io;
+#import std::core;
+#import std::io::sys_file;
+
+fn IO::print(msg: StringView) {
+    sys_file::stdout_write(msg.bytes, msg.length);
+}
+
+fn IO::println(msg: StringView) {
+    IO::print(msg);
+    IO::print("\n");
+}

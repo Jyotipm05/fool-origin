@@ -1,0 +1,16 @@
+module std::math;
+
+// Default scalar branch monomorphization
+fn Math<SIMD = false>::dot_product(a: const*f32, b: const* f32, length: usize) -> f32 {
+    var sum: f32 = 0.0;
+    for i in 0..length {
+        sum = sum + a[i] * b[i];
+    }
+    return sum;
+}
+
+fn Math<SIMD = false>::add_scalar(data: *f32, length: usize, scalar: f32) {
+    for i in 0..length {
+        data[i] = data[i] + scalar;
+    }
+}

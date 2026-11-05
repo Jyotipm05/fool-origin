@@ -1,0 +1,18 @@
+module std::core::sys_mem;
+
+@target(arch = "wasm32")
+@extern("llvm", link_name = "llvm.wasm.memory.grow")
+fn wasm_grow(mem_idx: i32, pages: i32) -> i32;
+
+fn os_alloc_pages(bytes: usize) -> *u8 {
+    var pages_needed = ((bytes + 65535) / 65536) as i32;
+    var prev_page = wasm_grow(0, pages_needed);
+    if prev_page == -1 {
+        return 0 as*u8;
+    }
+    return (prev_page *65536) as*u8;
+}
+
+fn os_free_pages(ptr: *u8, bytes: usize) {
+    // WebAssembly linear memory growth is monotonic; reuse via user-space allocators
+}

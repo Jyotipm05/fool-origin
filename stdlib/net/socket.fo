@@ -1,0 +1,13 @@
+module std::net;
+#import std::core;
+
+class TcpSocket {
+    fd: i32;
+    connected: bool;
+
+    fn open() -> TcpSocket;
+    fn connect(this &self, ip: StringView, port: u16) -> bool;
+    fn send(this &self, data: const& Span<u8>) -> isize;
+    fn receive(this &self, buffer: &Span<u8>) -> isize;
+    fn close(this &self);
+}

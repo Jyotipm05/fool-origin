@@ -1,0 +1,29 @@
+module std::io;
+#import std::io::posix_ffi;
+
+fn File::open(path: StringView, mode: FileMode) -> File {
+    var flags = 0;
+    if mode == FileMode::Read { flags = 0; }
+    if mode == FileMode::Write { flags = 577; } // O_WRONLY | O_CREAT | O_TRUNC
+    if mode == FileMode::Append { flags = 1089; } // O_WRONLY | O_CREAT | O_APPEND
+
+    var fd = posix_ffi::c_open(path.bytes, flags, 438 /* 0666 */);
+    return File { handle: fd as i64, is_open: (fd >= 0) };
+}
+
+fn File::read(this &self, buffer: &Span<u8>) -> isize {
+    if !self.is_open { return -1; }
+    return posix_ffi::c_read(self.handle as i32, buffer.ptr, buffer.length);
+}
+
+fn File::write(this &self, data: const& Span<u8>) -> isize {
+    if !self.is_open { return -1; }
+    return posix_ffi::c_write(self.handle as i32, data.ptr, data.length);
+}
+
+fn File::close(this &self) {
+    if self.is_open {
+        posix_ffi::c_close(self.handle as i32);
+        self.is_open = false;
+    }
+}

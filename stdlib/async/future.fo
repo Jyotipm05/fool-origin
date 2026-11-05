@@ -1,0 +1,10 @@
+module std::async;
+
+enum Poll<T> {
+    Ready(T),
+    Pending,
+}
+
+ruleset Future<T> {
+    fn poll(this &self) -> Poll<T>;
+}

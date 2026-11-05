@@ -1,0 +1,24 @@
+module std::sync;
+#import std::core;
+
+ruleset Lockable<T> {
+    fn lock(this &self);
+    fn unlock(this &self);
+}
+
+class Mutex<T> {
+    state: Atomic<u32>;
+    data: T;
+
+    fn create(value: T) -> Mutex<T>;
+    fn lock(this &self) -> MutexGuard<T>;
+    fn unlock(this &self);
+}
+
+class MutexGuard<T> {
+    lock_ref: &Mutex<T>;
+
+    fn get(this const& self) -> const& T;
+    fn get_mut(this &self) -> &T;
+    fn release(this self);
+}

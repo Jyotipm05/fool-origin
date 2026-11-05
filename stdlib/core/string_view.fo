@@ -1,0 +1,12 @@
+module std::core;
+
+class StringView {
+    bytes: const* u8;
+    length: usize;
+
+    fn from_raw(raw: const* u8, len: usize) -> StringView;
+    fn len(this const& self) -> usize;
+    fn equals(this const& self, other: StringView) -> bool;
+    fn starts_with(this const& self, prefix: StringView) -> bool;
+    fn subview(this const& self, offset: usize, count: usize) -> StringView;
+}

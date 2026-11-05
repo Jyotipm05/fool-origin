@@ -1,0 +1,36 @@
+module std::core;
+
+fn Span<T>::from_parts(data: *T, count: usize) -> Span<T> {
+    return Span<T> { ptr: data, length: count };
+}
+
+fn Span<T>::len(this const& self) -> usize {
+    return self.length;
+}
+
+fn Span<T>::is_empty(this const& self) -> bool {
+    return self.length == 0;
+}
+
+fn Span<T>::get(this const& self, index: usize) -> const& T {
+    if index >= self.length {
+        // Triggers bounds diagnostic in debug mode
+        return self.ptr[0];
+    }
+    return self.ptr[index];
+}
+
+fn Span<T>::get_mut(this &self, index: usize) -> &T {
+    if index >= self.length {
+        return self.ptr[0];
+    }
+    return self.ptr[index];
+}
+
+fn Span<T>::slice(this const& self, start: usize, end: usize) -> Span<T> {
+    if start > end || end > self.length {
+        return Span<T>::from_parts(0 as *T, 0);
+    }
+    var sub_ptr = (self.ptr as usize + start* @size_of(T)) as *T;
+    return Span<T>::from_parts(sub_ptr, end - start);
+}

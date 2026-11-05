@@ -1,0 +1,41 @@
+module std::core;
+
+fn StringView::from_raw(raw: const* u8, len: usize) -> StringView {
+    return StringView { bytes: raw, length: len };
+}
+
+fn StringView::len(this const& self) -> usize {
+    return self.length;
+}
+
+fn StringView::equals(this const& self, other: StringView) -> bool {
+    if self.length != other.length {
+        return false;
+    }
+    for i in 0..self.length {
+        if self.bytes[i] != other.bytes[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn StringView::starts_with(this const& self, prefix: StringView) -> bool {
+    if prefix.length > self.length {
+        return false;
+    }
+    for i in 0..prefix.length {
+        if self.bytes[i] != prefix.bytes[i] {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn StringView::subview(this const& self, offset: usize, count: usize) -> StringView {
+    if offset + count > self.length {
+        return StringView::from_raw(0 as const*u8, 0);
+    }
+    var new_ptr = (self.bytes as usize + offset) as const* u8;
+    return StringView::from_raw(new_ptr, count);
+}

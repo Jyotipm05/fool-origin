@@ -1,0 +1,11 @@
+//
+// examples/03_middle_defaults.fo
+// Interface blueprint: middle and trailing default parameters.
+//
+
+module examples::middle_defaults;
+
+async fn render_box(x: f32, y: f32, scale: f32 = 1, width: f32, height: f32, depth: f32 = 0) -> i32;
+fn configure_server(host: StringView, port: u16 = 8080, max_conns: usize = 1024, backlog: i32) -> bool;
+fn run_pipeline();
+

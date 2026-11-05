@@ -1,0 +1,11 @@
+module std::async;
+#import std::async::epoll_ffi;
+
+fn EventLoop::init() -> EventLoop {
+    var fd = epoll_ffi::epoll_create1(0);
+    return EventLoop { loop_fd: fd };
+}
+
+fn EventLoop::poll_events(this &self, timeout_ms: i32) {
+    // Lowers to epoll_wait
+}

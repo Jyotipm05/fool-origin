@@ -1,0 +1,16 @@
+module std::io;
+#import std::core;
+
+ruleset Reader {
+    fn read(this &self, buffer: &Span<u8>) -> isize;
+}
+
+ruleset Writer {
+    fn write(this &self, data: const& Span<u8>) -> isize;
+    fn flush(this &self);
+}
+
+class IO {
+    fn print(msg: StringView);
+    fn println(msg: StringView);
+}

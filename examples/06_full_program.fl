@@ -1,0 +1,41 @@
+//
+// examples/06_full_program.fl
+// End-to-end sample application written in idiomatic Fool.
+//
+
+module examples::full_program;
+
+#import std::core;
+#import std::io;
+
+fn SessionManager::start(this &self) -> bool {
+    if (self.is_running) {
+        return false;
+    }
+    self.is_running = true;
+    self.active_count = 0;
+    return true;
+}
+
+fn SessionManager::get_active_sessions(this const& self) -> usize {
+    return self.active_count;
+}
+
+fn SessionManager::stop(this self) {
+    // Destructive move terminates session manager instance
+    return;
+}
+
+fn main() -> i32 {
+    const max_retries = 3;
+    current_try = 0;
+
+    while_active = true;
+    current_try = current_try + 1;
+
+    if (current_try > max_retries) {
+        return 1;
+    }
+
+    return 0;
+}

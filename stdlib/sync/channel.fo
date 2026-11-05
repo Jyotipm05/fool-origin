@@ -1,0 +1,9 @@
+module std::sync;
+
+class Channel<T> {
+    capacity: usize;
+
+    fn create(capacity: usize) -> Channel<T>;
+    fn send(this &self, item: T) -> bool;
+    fn receive(this &self) -> T;
+}

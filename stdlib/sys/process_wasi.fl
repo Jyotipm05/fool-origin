@@ -1,0 +1,17 @@
+module std::sys;
+
+@target(os = "wasi")
+@extern("wasi_snapshot_preview1", link_name = "proc_exit")
+fn proc_exit(rval: i32) -> !;
+
+fn Process::exit(code: i32) -> ! {
+    proc_exit(code);
+}
+
+fn Process::args_count() -> usize {
+    return 0;
+}
+
+fn Process::get_arg(index: usize) -> StringView {
+    return StringView::from_raw("", 0);
+}

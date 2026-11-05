@@ -1,0 +1,24 @@
+//
+// examples/06_full_program.fo
+// Interface blueprint for full sample application.
+//
+
+module examples::full_program;
+
+#import std::core;
+#import std::io;
+
+constx MAX_ENTRIES: usize = 256;
+constx DEFAULT_PORT: u16 = 8080;
+
+class SessionManager {
+    active_count: usize;
+    is_running: bool;
+
+    fn start(this &self) -> bool;
+    fn get_active_sessions(this const& self) -> usize;
+    fn stop(this self);
+}
+
+fn main() -> i32;
+

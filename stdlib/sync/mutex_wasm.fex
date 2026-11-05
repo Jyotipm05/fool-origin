@@ -1,0 +1,18 @@
+module std::sync::ffi;
+#import std::core;
+
+@target(arch = "wasm32")
+@extern("llvm", link_name = "llvm.wasm.memory.atomic.wait32")
+fn wasm_wait(ptr: *i32, exp: i32, timeout: i64) -> i32;
+
+@target(arch = "wasm32")
+@extern("llvm", link_name = "llvm.wasm.memory.atomic.notify")
+fn wasm_notify(ptr: *i32, count: i32) -> i32;
+
+fn platform_wait(state: *Atomic<u32>, expected: u32) {
+    wasm_wait(state as*i32, expected as i32, -1);
+}
+
+fn platform_wake(state: *Atomic<u32>, count: i32) {
+    wasm_notify(state as*i32, count);
+}

@@ -1,0 +1,14 @@
+module std::sync::ffi;
+#import std::core;
+
+@target(os = "linux")
+@extern("C", link_name = "syscall")
+fn c_syscall(nr: i64, addr: *void, op: i32, val: u32, timeout: usize) -> i32;
+
+fn platform_wait(state: *Atomic<u32>, expected: u32) {
+    c_syscall(202 /* SYS_futex */, state as *void, 128 /* FUTEX_WAIT_PRIVATE*/, expected, 0);
+}
+
+fn platform_wake(state: *Atomic<u32>, count: i32) {
+    c_syscall(202 /* SYS_futex */, state as *void, 129 /* FUTEX_WAKE_PRIVATE*/, count as u32, 0);
+}

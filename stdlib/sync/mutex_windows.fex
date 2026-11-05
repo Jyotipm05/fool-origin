@@ -1,0 +1,19 @@
+module std::sync::ffi;
+#import std::core;
+
+@target(os = "windows")
+@extern("C", link_name = "WaitOnAddress")
+fn WaitOnAddress(addr: *void, comp:*void, size: usize, timeout: u32) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "WakeByAddressSingle")
+fn WakeByAddressSingle(addr: *void);
+
+fn platform_wait(state: *Atomic<u32>, expected: u32) {
+    var exp = expected;
+    WaitOnAddress(state as*void, &exp as *void, 4, 0xFFFFFFFF);
+}
+
+fn platform_wake(state: *Atomic<u32>, count: i32) {
+    WakeByAddressSingle(state as*void);
+}

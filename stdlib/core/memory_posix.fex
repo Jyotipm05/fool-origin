@@ -1,0 +1,20 @@
+module std::core::sys_mem;
+
+@target(os = "linux")
+@target(os = "darwin")
+@extern("C", link_name = "mmap")
+fn c_mmap(addr: *void, length: usize, prot: i32, flags: i32, fd: i32, offset: i64) ->*u8;
+
+@target(os = "linux")
+@target(os = "darwin")
+@extern("C", link_name = "munmap")
+fn c_munmap(addr: *u8, length: usize) -> i32;
+
+fn os_alloc_pages(bytes: usize) -> *u8 {
+    // PROT_READ | PROT_WRITE (3), MAP_PRIVATE | MAP_ANONYMOUS (0x22)
+    return c_mmap(0 as*void, bytes, 3, 0x22, -1, 0);
+}
+
+fn os_free_pages(ptr: *u8, bytes: usize) {
+    c_munmap(ptr, bytes);
+}

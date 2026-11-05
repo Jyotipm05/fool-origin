@@ -1,0 +1,8 @@
+module std::sys;
+#import std::core;
+
+class Process {
+    fn exit(code: i32) -> !;
+    fn args_count() -> usize;
+    fn get_arg(index: usize) -> StringView;
+}

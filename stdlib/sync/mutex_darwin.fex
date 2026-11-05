@@ -1,0 +1,18 @@
+module std::sync::ffi;
+#import std::core;
+
+@target(os = "darwin")
+@extern("C", link_name = "__ulock_wait")
+fn ulock_wait(op: u32, addr: *void, val: u64, timeout: u32) -> i32;
+
+@target(os = "darwin")
+@extern("C", link_name = "__ulock_wake")
+fn ulock_wake(op: u32, addr: *void, wake_value: u64) -> i32;
+
+fn platform_wait(state: *Atomic<u32>, expected: u32) {
+    ulock_wait(1 /* UL_COMPARE_AND_WAIT */, state as*void, expected as u64, 0);
+}
+
+fn platform_wake(state: *Atomic<u32>, count: i32) {
+    ulock_wake(1 /* UL_COMPARE_AND_WAIT */, state as*void, 0);
+}

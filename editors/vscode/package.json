@@ -1,0 +1,49 @@
+{
+  "name": "fool-vscode",
+  "displayName": "Fool Language Support",
+  "description": "Language syntax highlighting, snippets, and IntelliSense definitions for the Fool programming language (.fo, .fl, .fex).",
+  "version": "0.1.0",
+  "publisher": "fool-origin",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "fool",
+    "systems programming",
+    "syntax",
+    "highlighting"
+  ],
+  "main": "",
+  "contributes": {
+    "languages": [
+      {
+        "id": "fool",
+        "aliases": ["Fool", "fool"],
+        "extensions": [".fo", ".fl", ".fex"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fool",
+        "scopeName": "source.fool",
+        "path": "./syntaxes/fool.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "fool",
+        "path": "./snippets/fool.json"
+      }
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fool-origin/fool"
+  }
+}
+

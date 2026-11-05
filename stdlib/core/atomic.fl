@@ -1,0 +1,26 @@
+module std::core;
+#import std::core::intrinsics;
+
+fn Atomic<T>::new(initial: T) -> Atomic<T> {
+    return Atomic<T> { value: initial };
+}
+
+fn Atomic<T>::load(this const& self, order: MemoryOrder) -> T {
+    return intrinsics::atomic_load(&self.value, order as i32);
+}
+
+fn Atomic<T>::store(this &self, val: T, order: MemoryOrder) {
+    intrinsics::atomic_store(&self.value, val, order as i32);
+}
+
+fn Atomic<T>::compare_exchange(this &self, expected: T, desired: T, order: MemoryOrder) -> bool {
+    return intrinsics::atomic_cas(&self.value, expected, desired, order as i32);
+}
+
+fn Atomic<T>::fetch_add(this &self, val: T, order: MemoryOrder) -> T {
+    return intrinsics::atomic_fetch_add(&self.value, val, order as i32);
+}
+
+fn Atomic<T>::exchange(this &self, desired: T, order: MemoryOrder) -> T {
+    return intrinsics::atomic_swap(&self.value, desired, order as i32);
+}

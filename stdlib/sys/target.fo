@@ -1,0 +1,8 @@
+module std::sys;
+
+class Target {
+    fn is_linux() -> bool;
+    fn is_windows() -> bool;
+    fn is_wasm() -> bool;
+    fn pointer_width() -> u8;
+}

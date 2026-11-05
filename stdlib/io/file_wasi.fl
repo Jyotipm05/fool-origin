@@ -1,0 +1,20 @@
+module std::io;
+#import std::io::wasi_ffi;
+
+fn File::open(path: StringView, mode: FileMode) -> File {
+    var fd: i32 = -1;
+    // WASI path_open call
+    return File { handle: fd as i64, is_open: false };
+}
+
+fn File::read(this &self, buffer: &Span<u8>) -> isize {
+    return -1;
+}
+
+fn File::write(this &self, data: const& Span<u8>) -> isize {
+    return -1;
+}
+
+fn File::close(this &self) {
+    self.is_open = false;
+}

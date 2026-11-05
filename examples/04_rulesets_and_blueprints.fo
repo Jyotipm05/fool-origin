@@ -1,0 +1,30 @@
+//
+// examples/04_rulesets_and_blueprints.fo
+// Interface blueprint: nominal capability bounds (ruleset) and templates (blueprint).
+//
+
+module examples::rulesets_and_blueprints;
+
+// Nominal capability contract (concept / trait equivalent, no class inheritance)
+ruleset Equatable<T> {
+    fn equals(this const& self, other: const& T) -> bool;
+}
+
+ruleset Printable<T: Equatable> {
+    fn to_string(this const& self) -> StringView;
+}
+
+// Compile-time monomorphized blueprint
+blueprint VectorMath<SIMD: bool = false> {
+    fn dot_product(a: const* f32, b: const* f32, len: usize) -> f32;
+    fn scale_vector(data: *f32, len: usize, factor: f32);
+}
+
+class Point2D {
+    x: f32;
+    y: f32;
+
+    fn equals(this const& self, other: const& Point2D) -> bool;
+    fn translate(this &self, dx: f32, dy: f32);
+}
+

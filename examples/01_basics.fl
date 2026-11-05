@@ -1,0 +1,42 @@
+//
+// examples/01_basics.fl
+// Demonstrates Fool variable bindings, constx constants, and basic statements.
+//
+
+module examples::basics;
+
+// Compile-time constant (C++ constexpr / Rust const)
+constx BUFFER_CAPACITY: usize = 4096;
+constx MAX_WORKERS: i32 = 8;
+constx PI: f64 = 3.1415926535;
+
+// Basic function declaration
+fn calculate_area(radius: f64) -> f64 {
+    // Immutable runtime binding (Rust-like strict immutability)
+    const factor = 2.0;
+
+    // Explicit type annotation with const
+    const scale: f64 = 1.0;
+
+    // Mutable variable (mutable by default, '=' or 'var')
+    total = radius * radius * PI;
+    var iterations: i32 = 0;
+
+    iterations = iterations + 1;
+    total = total * factor * scale;
+
+    return total;
+}
+
+fn entry() -> i32 {
+    const limit = 100;
+    count = 0;
+    count = count + 10;
+
+    if (count > limit) {
+        return 1;
+    }
+
+    return 0;
+}
+
