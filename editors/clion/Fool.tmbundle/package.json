@@ -1,0 +1,32 @@
+{
+  "name": "fool",
+  "displayName": "Fool",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "fool",
+        "aliases": [
+          "Fool",
+          "fool"
+        ],
+        "extensions": [
+          ".fo",
+          ".fl",
+          ".fex"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "fool",
+        "scopeName": "source.fool",
+        "path": "./Syntaxes/Fool.tmLanguage.json"
+      }
+    ]
+  }
+}
+

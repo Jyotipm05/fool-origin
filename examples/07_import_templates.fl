@@ -1,0 +1,39 @@
+//
+// examples/07_import_templates.fl
+// Implementation unit corresponding to examples/07_import_templates.fo
+//
+
+module examples::import_templates<ASIO_IOURING_ON = 1, INIT = 0>;
+
+@if def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)
+fn iouring_setup() -> bool {
+    return true;
+}
+
+@if def(INIT)
+fn system_init() {
+    return;
+}
+
+fn AsyncEngine::start(this &self) -> bool {
+    self.active = true;
+    return true;
+}
+
+// Consumer functions demonstrating both usage forms:
+// 1. With explicit override:
+//    #import examples::import_templates<ASIO_IOURING_ON = 1>;
+// 2. With default values:
+//    #import examples::import_templates;
+fn entry() -> i32 {
+    // Compile-time @if branch inside function body (zero runtime overhead, pruned before codegen)
+    @if def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1) {
+        iouring_setup();
+    } @elif def(EPOLL_ON) {
+        system_init();
+    } @else {
+        return 1;
+    }
+
+    return 0;
+}

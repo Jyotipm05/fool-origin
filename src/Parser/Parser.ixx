@@ -29,6 +29,7 @@ class Parser {
     std::vector<Token> m_tokens;
     size_t m_cursor{0};
     Arena& m_arena;
+    ModuleAST* m_current_module{nullptr};
 
 public:
     // 2. Constructors and Destructors in the MIDDLE

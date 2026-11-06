@@ -10,6 +10,7 @@
 module;
 
 #include <vector>
+#include <string>
 #include <string_view>
 #include <cstdint>
 #include <optional>
@@ -206,6 +207,37 @@ public:
 };
 
 /**
+ * @struct ConditionalBranch
+ * @brief Represents a branch in a compile-time @if, @elif, or @else directive inside a function.
+ */
+struct ConditionalBranch {
+    // 1. Member variables
+    std::string m_condition_text;  ///< Condition (e.g. "def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)"), empty for @else
+    std::vector<StmtNode*> m_body; ///< Statements inside this branch
+
+    // 2. Constructors
+    ConditionalBranch() = default;
+    ConditionalBranch(std::string cond, std::vector<StmtNode*> body)
+        : m_condition_text(std::move(cond)), m_body(std::move(body)) {}
+};
+
+/**
+ * @class ConditionalStmt
+ * @brief Compile-time conditional branch inside function bodies (@if (...) { ... } @elif (...) { ... } @else { ... }).
+ * Zero runtime overhead; inactive branches are pruned before codegen.
+ */
+class ConditionalStmt : public StmtNode {
+public:
+    // 1. Member variables
+    std::vector<ConditionalBranch> m_branches;
+
+    // 2. Constructors
+    ConditionalStmt() = default;
+    explicit ConditionalStmt(std::vector<ConditionalBranch> branches)
+        : m_branches(std::move(branches)) {}
+};
+
+/**
  * @class DeclNode
  * @brief Base class for declarations with attached attributes and target activation flags.
  */
@@ -220,17 +252,64 @@ public:
 };
 
 /**
+ * @struct ConditionalDeclBranch
+ * @brief Represents a branch in a top-level compile-time declaration block (@if (cond) { ... } @else { ... }).
+ */
+struct ConditionalDeclBranch {
+    // 1. Member variables
+    std::string m_condition_text;
+    std::vector<DeclNode*> m_declarations;
+
+    // 2. Constructors
+    ConditionalDeclBranch() = default;
+    ConditionalDeclBranch(std::string cond, std::vector<DeclNode*> decls)
+        : m_condition_text(std::move(cond)), m_declarations(std::move(decls)) {}
+};
+
+/**
+ * @class ConditionalDeclBlock
+ * @brief Top-level compile-time conditional block containing multiple declarations.
+ */
+class ConditionalDeclBlock : public DeclNode {
+public:
+    // 1. Member variables
+    std::vector<ConditionalDeclBranch> m_branches;
+
+    // 2. Constructors
+    ConditionalDeclBlock() = default;
+    explicit ConditionalDeclBlock(std::vector<ConditionalDeclBranch> branches)
+        : m_branches(std::move(branches)) {}
+};
+
+/**
+ * @struct ImportArg
+ * @brief Compile-time template argument passed into a parameterized module import (#import mod<A = 10, B = true>;).
+ */
+struct ImportArg {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    ExprNode* m_value{nullptr};
+
+    // 2. Constructors
+    ImportArg() = default;
+    ImportArg(SymbolID name, ExprNode* val) : m_name(name), m_value(val) {}
+};
+
+/**
  * @class ImportDeclNode
- * @brief Module import directive (#import std::core;)
+ * @brief Module import directive (#import std::core; or #import math::matrix<Rows = 4>;)
  */
 class ImportDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_module_path{INVALID_SYMBOL_ID};
+    std::vector<ImportArg> m_template_args;
 
     // 2. Constructors
     ImportDeclNode() = default;
     explicit ImportDeclNode(SymbolID path) : m_module_path(path) {}
+    ImportDeclNode(SymbolID path, std::vector<ImportArg> args)
+        : m_module_path(path), m_template_args(std::move(args)) {}
 };
 
 /**
@@ -332,10 +411,26 @@ public:
     EnumDeclNode() = default;
 };
 
+/**
+ * @struct ModuleParam
+ * @brief Template parameter in a parameterized module declaration (module name<A = 1, B = 0>;).
+ */
+struct ModuleParam {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    ExprNode* m_default_value{nullptr};
+
+    // 2. Constructors
+    ModuleParam() = default;
+    ModuleParam(SymbolID name, ExprNode* def_val = nullptr)
+        : m_name(name), m_default_value(def_val) {}
+};
+
 class ModuleAST : public ASTNode {
 public:
     // 1. Member variables
     SymbolID m_module_name{INVALID_SYMBOL_ID};
+    std::vector<ModuleParam> m_parameters;
     std::vector<DeclNode*> m_declarations;
 
     // 2. Constructors

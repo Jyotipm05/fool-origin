@@ -17,6 +17,8 @@ add_executable(foolc
         src/Lexer/Lexer.cpp
         src/Parser/Parser.cpp
         src/Sema/SymbolTable.cpp
+        src/Sema/ModuleGraph.cpp
+        src/Sema/TypeChecker.cpp
 )
 
 # C++20 Module Interfaces directly inside src/
@@ -45,14 +47,23 @@ include(CTest)
 enable_testing()
 
 if (BUILD_TESTING)
-    # 1. Default test suite runner
+    # 1. Default test suite runner (tests all examples)
     add_test(
         NAME foolc_default_suite
         COMMAND foolc
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    set_tests_properties(foolc_default_suite PROPERTIES LABELS "smoke;default")
 
-    # 2. Individual tests for each example file (.fo, .fl, .fex)
+    # 2. Dedicated test for Module Templates & @if def(...) conditional compilation
+    add_test(
+        NAME foolc_test_import_templates
+        COMMAND foolc "${CMAKE_SOURCE_DIR}/examples/07_import_templates.fo" "${CMAKE_SOURCE_DIR}/examples/07_import_templates.fl"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    set_tests_properties(foolc_test_import_templates PROPERTIES LABELS "templates;examples")
+
+    # 3. Individual tests for each example file (.fo, .fl, .fex)
     file(GLOB_RECURSE FOOL_EXAMPLE_FILES
         LIST_DIRECTORIES false
         "${CMAKE_SOURCE_DIR}/examples/*.fo"
@@ -70,9 +81,10 @@ if (BUILD_TESTING)
             COMMAND foolc "${TEST_FILE}"
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
+        set_tests_properties("foolc_test_${TEST_NAME_CLEAN}" PROPERTIES LABELS "examples")
     endforeach()
 
-    # 3. Individual tests for standard library files (.fo, .fl, .fex)
+    # 4. Individual tests for standard library files (.fo, .fl, .fex)
     file(GLOB_RECURSE FOOL_STDLIB_FILES
         LIST_DIRECTORIES false
         "${CMAKE_SOURCE_DIR}/stdlib/*.fo"
@@ -90,5 +102,6 @@ if (BUILD_TESTING)
             COMMAND foolc "${STDLIB_FILE}"
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         )
+        set_tests_properties("foolc_test_${TEST_NAME_CLEAN}" PROPERTIES LABELS "stdlib")
     endforeach()
 endif()

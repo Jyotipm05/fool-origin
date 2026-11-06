@@ -60,10 +60,21 @@ bool test_source_file(const std::filesystem::path& file_path, const fool::Target
     fool::SymbolTablePass0 pass0(target);
     pass0.collect_declarations(module_ast);
 
-    // 5. Inspect AST
+    // 5. Pass 2 Semantic Analysis, Immutability & Compile-Time Branch Pruning
+    fool::TypeCheckerPass2 pass2(pass0);
+    bool sema_ok = pass2.check_module(module_ast);
+    if (!sema_ok) {
+        std::cerr << "Semantic analysis failed with " << pass2.get_error_count() << " error(s) in: "
+                  << file_path << "\n";
+        return false;
+    }
+
+    // 6. Inspect AST
     auto& interner = fool::StringInterner::get();
     for (const auto* decl : module_ast->m_declarations) {
-        if (const auto* fn = dynamic_cast<const fool::FunctionDeclNode*>(decl)) {
+        if (const auto* cb = dynamic_cast<const fool::ConditionalDeclBlock*>(decl)) {
+            std::cout << "  - Compile-Time Block [branches: " << cb->m_branches.size() << "]\n";
+        } else if (const auto* fn = dynamic_cast<const fool::FunctionDeclNode*>(decl)) {
             std::cout << "  - Function '" << interner.resolve(fn->m_name)
                       << "' [active: " << (fn->m_is_active ? "YES" : "NO (Pruned)")
                       << ", async: " << (fn->m_is_async ? "YES" : "NO") << "]\n";
@@ -83,7 +94,20 @@ bool test_source_file(const std::filesystem::path& file_path, const fool::Target
             std::cout << "  - Binding '" << interner.resolve(var->m_name)
                       << "' [" << kind_str << "]\n";
         } else if (const auto* imp = dynamic_cast<const fool::ImportDeclNode*>(decl)) {
-            std::cout << "  - Import '#import " << interner.resolve(imp->m_module_path) << ";'\n";
+            std::cout << "  - Import '#import " << interner.resolve(imp->m_module_path);
+            if (!imp->m_template_args.empty()) {
+                std::cout << "<";
+                for (size_t i = 0; i < imp->m_template_args.size(); ++i) {
+                    if (i > 0) std::cout << ", ";
+                    if (imp->m_template_args[i].m_name != fool::INVALID_SYMBOL_ID) {
+                        std::cout << interner.resolve(imp->m_template_args[i].m_name) << " = ...";
+                    } else {
+                        std::cout << "...";
+                    }
+                }
+                std::cout << ">";
+            }
+            std::cout << ";'\n";
         }
     }
     return true;
@@ -122,7 +146,9 @@ int main(int argc, char* argv[]) {
         "examples/04_rulesets_and_blueprints.fl",
         "examples/05_target_pruning.fex",
         "examples/06_full_program.fo",
-        "examples/06_full_program.fl"
+        "examples/06_full_program.fl",
+        "examples/07_import_templates.fo",
+        "examples/07_import_templates.fl"
     };
 
     int failures = 0;

@@ -145,26 +145,52 @@ ExprNode* Parser::parse_expression(int min_precedence) {
 AttributeNode Parser::parse_attribute() {
     SourceLocation start = current().m_span.m_start;
     consume(TokenKind::At, "Expected '@'");
-    Token name_tok = consume(TokenKind::Identifier, "Expected attribute name");
+    Token name_tok = current();
+    if (check(TokenKind::Identifier) || check(TokenKind::KwIf)) {
+        advance();
+    } else {
+        name_tok = consume(TokenKind::Identifier, "Expected attribute name");
+    }
     AttributeNode attr;
-    attr.m_name = name_tok.m_symbol_id;
+    auto& interner = StringInterner::get();
+    attr.m_name = (name_tok.m_kind == TokenKind::KwIf) ? interner.intern("if") : name_tok.m_symbol_id;
 
     if (check(TokenKind::OpenParen)) {
         advance();
-        while (!check(TokenKind::CloseParen) && !is_at_end()) {
-            size_t prev_cursor = m_cursor;
-            AttributeArg arg;
-            if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
-                arg.m_key = advance().m_symbol_id;
-                advance(); // consume '='
+        if (interner.resolve(attr.m_name) == "if") {
+            // Raw condition string supporting nested parens, def(...), &&, ==, etc.
+            int paren_depth = 1;
+            std::string condition;
+            while (paren_depth > 0 && !is_at_end()) {
+                if (check(TokenKind::OpenParen)) paren_depth++;
+                else if (check(TokenKind::CloseParen)) {
+                    paren_depth--;
+                    if (paren_depth == 0) break;
+                }
+                if (!condition.empty() && current().m_kind != TokenKind::Dot && current().m_kind != TokenKind::OpenParen) {
+                    condition += " ";
+                }
+                condition += current().m_raw_lexeme;
+                advance();
             }
-            Token val = advance();
-            arg.m_value = val.m_raw_lexeme;
-            attr.m_args.push_back(arg);
-            if (!check(TokenKind::CloseParen)) consume(TokenKind::Comma, "Expected ','");
-            if (m_cursor == prev_cursor && !is_at_end()) advance();
+            consume(TokenKind::CloseParen, "Expected ')' after @if condition");
+            attr.m_args.push_back(AttributeArg(interner.intern("condition"), interner.resolve(interner.intern(condition))));
+        } else {
+            while (!check(TokenKind::CloseParen) && !is_at_end()) {
+                size_t prev_cursor = m_cursor;
+                AttributeArg arg;
+                if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
+                    arg.m_key = advance().m_symbol_id;
+                    advance(); // consume '='
+                }
+                Token val = advance();
+                arg.m_value = val.m_raw_lexeme;
+                attr.m_args.push_back(arg);
+                if (!check(TokenKind::CloseParen)) consume(TokenKind::Comma, "Expected ','");
+                if (m_cursor == prev_cursor && !is_at_end()) advance();
+            }
+            consume(TokenKind::CloseParen, "Expected ')' after attribute arguments");
         }
-        consume(TokenKind::CloseParen, "Expected ')' after attribute arguments");
     }
     attr.m_span = {start, current().m_span.m_end};
     return attr;
@@ -396,6 +422,64 @@ VarDeclNode* Parser::parse_var_decl() {
 StmtNode* Parser::parse_statement() {
     size_t prev_cursor = m_cursor;
 
+    // Compile-time conditional branch inside function:
+    // @if (cond) { ... } @elif (cond) { ... } @else { ... } OR single-statement @if (cond) stmt;
+    if (check(TokenKind::At) && (peek().m_kind == TokenKind::KwIf || peek().m_raw_lexeme == "if")) {
+        std::vector<ConditionalBranch> branches;
+
+        while (check(TokenKind::At) && !is_at_end()) {
+            std::string_view dir_name = peek().m_raw_lexeme;
+            if (peek().m_kind == TokenKind::KwIf) dir_name = "if";
+            else if (peek().m_kind == TokenKind::KwElse) dir_name = "else";
+
+            if (dir_name != "if" && dir_name != "elif" && dir_name != "else") {
+                break;
+            }
+
+            advance(); // consume '@'
+            advance(); // consume 'if' / 'elif' / 'else'
+
+            std::string condition;
+            if (dir_name == "if" || dir_name == "elif") {
+                consume(TokenKind::OpenParen, "Expected '(' after @if / @elif");
+                int paren_depth = 1;
+                while (paren_depth > 0 && !is_at_end()) {
+                    if (check(TokenKind::OpenParen)) paren_depth++;
+                    else if (check(TokenKind::CloseParen)) {
+                        paren_depth--;
+                        if (paren_depth == 0) break;
+                    }
+                    if (!condition.empty() && current().m_kind != TokenKind::Dot && current().m_kind != TokenKind::OpenParen) {
+                        condition += " ";
+                    }
+                    condition += current().m_raw_lexeme;
+                    advance();
+                }
+                consume(TokenKind::CloseParen, "Expected ')' after condition");
+            }
+
+            std::vector<StmtNode*> body;
+            if (check(TokenKind::OpenBrace)) {
+                advance(); // consume '{'
+                while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+                    size_t prev_cur = m_cursor;
+                    body.push_back(parse_statement());
+                    if (m_cursor == prev_cur && !is_at_end()) advance();
+                }
+                consume(TokenKind::CloseBrace, "Expected '}'");
+            } else {
+                body.push_back(parse_statement());
+            }
+
+            branches.emplace_back(std::move(condition), std::move(body));
+
+            if (dir_name == "else") {
+                break;
+            }
+        }
+        return m_arena.create<ConditionalStmt>(std::move(branches));
+    }
+
     if (check(TokenKind::KwReturn)) {
         advance();
         auto* ret = m_arena.create<ReturnStmt>();
@@ -436,6 +520,32 @@ DeclNode* Parser::parse_declaration() {
         attributes.push_back(parse_attribute());
     }
 
+    // Check for multi-declaration compile-time block: @if (cond) { decl1; decl2; }
+    if (check(TokenKind::OpenBrace) && !attributes.empty()) {
+        auto& interner = StringInterner::get();
+        if (attributes.back().m_name == interner.intern("if")) {
+            advance(); // consume '{'
+            std::vector<DeclNode*> block_decls;
+            while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+                size_t prev_cur = m_cursor;
+                DeclNode* d = parse_declaration();
+                if (d) block_decls.push_back(d);
+                if (m_cursor == prev_cur && !is_at_end()) advance();
+            }
+            consume(TokenKind::CloseBrace, "Expected '}'");
+
+            std::string cond_str;
+            if (!attributes.back().m_args.empty()) {
+                cond_str = attributes.back().m_args[0].m_value;
+            }
+            std::vector<ConditionalDeclBranch> branches;
+            branches.emplace_back(std::move(cond_str), std::move(block_decls));
+            auto* block = m_arena.create<ConditionalDeclBlock>(std::move(branches));
+            block->m_attributes = std::move(attributes);
+            return block;
+        }
+    }
+
     DeclNode* decl = nullptr;
     if (check(TokenKind::HashImport) || (check(TokenKind::Hash) && peek().m_kind == TokenKind::KwImport) || check(TokenKind::KwImport)) {
         if (check(TokenKind::HashImport)) {
@@ -447,13 +557,34 @@ DeclNode* Parser::parse_declaration() {
             advance(); // consume 'import'
         }
         std::string mod_path;
-        while (!check(TokenKind::Semicolon) && !is_at_end()) {
+        while (!check(TokenKind::Semicolon) && !check(TokenKind::Less) && !is_at_end()) {
             mod_path += current().m_raw_lexeme;
             advance();
         }
-        consume(TokenKind::Semicolon, "Expected ';' after import path");
         SymbolID sym = StringInterner::get().intern(mod_path);
-        decl = m_arena.create<ImportDeclNode>(sym);
+        auto* imp = m_arena.create<ImportDeclNode>(sym);
+
+        // Parse compile-time import template arguments: <A = ..., B = ...>
+        if (check(TokenKind::Less)) {
+            advance(); // consume '<'
+            while (!check(TokenKind::Greater) && !is_at_end()) {
+                size_t prev_cur = m_cursor;
+                SymbolID arg_name = INVALID_SYMBOL_ID;
+                if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
+                    arg_name = advance().m_symbol_id;
+                    consume(TokenKind::Equal, "Expected '=' in import template argument");
+                }
+                ExprNode* val = parse_expression(0);
+                imp->m_template_args.push_back(ImportArg(arg_name, val));
+
+                if (check(TokenKind::Comma)) advance();
+                if (m_cursor == prev_cur && !is_at_end()) advance();
+            }
+            consume(TokenKind::Greater, "Expected '>' after import template arguments");
+        }
+
+        consume(TokenKind::Semicolon, "Expected ';' after import path");
+        decl = imp;
     } else if (check(TokenKind::KwAsync)) {
         advance();
         decl = parse_function(true);
@@ -470,10 +601,37 @@ DeclNode* Parser::parse_declaration() {
     } else if (check(TokenKind::KwConstx) || check(TokenKind::KwConst) || check(TokenKind::KwVar)) {
         decl = parse_var_decl();
     } else if (check(TokenKind::KwModule)) {
-        // Skip module declaration in declaration stream
-        advance();
-        while (!check(TokenKind::Semicolon) && !is_at_end()) {
+        advance(); // consume 'module'
+        std::string mod_name;
+        while (!check(TokenKind::Semicolon) && !check(TokenKind::Less) && !is_at_end()) {
+            mod_name += current().m_raw_lexeme;
             advance();
+        }
+        auto& interner = StringInterner::get();
+        if (m_current_module) {
+            m_current_module->m_module_name = interner.intern(mod_name);
+        }
+
+        // Module template parameters: module name<A = 1, B = 0>;
+        if (check(TokenKind::Less)) {
+            advance(); // consume '<'
+            while (!check(TokenKind::Greater) && !is_at_end()) {
+                size_t prev_cur = m_cursor;
+                if (check(TokenKind::Identifier)) {
+                    SymbolID p_name = advance().m_symbol_id;
+                    ExprNode* def_val = nullptr;
+                    if (check(TokenKind::Equal)) {
+                        advance();
+                        def_val = parse_expression(0);
+                    }
+                    if (m_current_module) {
+                        m_current_module->m_parameters.push_back(ModuleParam(p_name, def_val));
+                    }
+                }
+                if (check(TokenKind::Comma)) advance();
+                if (m_cursor == prev_cur && !is_at_end()) advance();
+            }
+            consume(TokenKind::Greater, "Expected '>' after module template parameters");
         }
         consume(TokenKind::Semicolon, "Expected ';'");
         return nullptr;
@@ -488,6 +646,7 @@ DeclNode* Parser::parse_declaration() {
 
 ModuleAST* Parser::parse_module() {
     auto* mod = m_arena.create<ModuleAST>();
+    m_current_module = mod;
     while (!is_at_end()) {
         size_t prev_cursor = m_cursor;
         DeclNode* decl = parse_declaration();

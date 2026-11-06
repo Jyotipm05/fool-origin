@@ -17,7 +17,9 @@
 - [The `foolc` Compiler Architecture](#the-foolc-compiler-architecture)
 - [Standard Library (`stdlib/`)](#standard-library-stdlib)
 - [Examples & Test Suite](#examples--test-suite)
-- [VS Code / Cursor IDE Extension](#vs-code--cursor-ide-extension)
+- [IDE Extensions (VS Code, Cursor, CLion, JetBrains)](#ide-extensions)
+  - [VS Code / Cursor](#vs-code--cursor)
+  - [CLion & JetBrains IDEs](#clion--jetbrains-ides)
 - [Building the Compiler](#building-the-compiler)
 - [License](#license)
 
@@ -148,6 +150,33 @@ fn win32_virtual_alloc(addr: *void, size: usize, alloc_type: u32, protect: u32) 
 
 ---
 
+### 7. Parameterized Module Imports & Conditional Directives (`@if def(...)`)
+
+In C/C++, libraries frequently depend on `#define CONFIG_FLAG` macros placed before `#include` to configure dependencies from the call site. Fool replaces this with hygienic **Module Templates** and **Import Templates**:
+
+**Module Definition (with default values):**
+```fool
+module name1<ASIO_IOURING_ON = 1, INIT = 0>; // declared with default values
+
+@if def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)
+fn func1() {
+    // Compiled when ASIO_IOURING_ON is active and equal to 1
+}
+```
+
+**Consumer Import Sites:**
+```fool
+// 1. With explicit compile-time overrides:
+#import name1<ASIO_IOURING_ON = 1>;
+
+// 2. Or using the module's default values:
+#import name1;
+```
+
+Dependent modules cleanly supply configuration values down to dependencies without global preprocessor macro leakage.
+
+---
+
 ## Repository Structure
 
 ```
@@ -241,14 +270,17 @@ The `examples/` directory contains verified test cases:
 | [`04_rulesets_and_blueprints`](examples/04_rulesets_and_blueprints.fo) | Nominal contracts (`ruleset`), monomorphized templates (`blueprint`). |
 | [`05_target_pruning`](examples/05_target_pruning.fex) | Foreign ABI bindings and Pass 0 `@target(...)` pruning. |
 | [`06_full_program`](examples/06_full_program.fo) | End-to-end sample application with `#import` and state transitions. |
+| [`07_import_templates`](examples/07_import_templates.fo) | Parameterized module imports (`#import mod<A=..., B=...>;`), replacing C++ `#define`. |
 
 ---
 
-## VS Code / Cursor IDE Extension
+## IDE Extensions
+
+### VS Code / Cursor
 
 A complete Visual Studio Code / Cursor extension is provided in `editors/vscode/` and packaged as [`fool-vscode-0.1.0.vsix`](fool-vscode-0.1.0.vsix).
 
-### Installation:
+#### Installation:
 
 ```bash
 code --install-extension fool-vscode-0.1.0.vsix
@@ -258,6 +290,27 @@ Or in the editor:
 1. Open the Extensions view (`Ctrl + Shift + X`).
 2. Click `...` in the upper-right corner.
 3. Select **Install from VSIX...** and choose `fool-vscode-0.1.0.vsix`.
+
+---
+
+### CLion & JetBrains IDEs
+
+Fool language support for **CLion**, **IntelliJ IDEA**, **Rider**, and other JetBrains IDEs is provided via the official TextMate bundle located in `editors/clion/Fool.tmbundle` and packaged as [`Fool.tmbundle.zip`](Fool.tmbundle.zip).
+
+#### Features:
+- Complete syntax highlighting for `.fo`, `.fl`, and `.fex` files.
+- Support for `@if / @elif / @else`, `#import<...>`, and module template headers.
+- Code commenting and uncommenting toggle with `Ctrl+/` (`Cmd+/` on macOS).
+- Full keyword, receiver, type, and operator scopes.
+
+#### 1-Minute Setup in CLion:
+1. Open CLion and go to **Settings** (`Ctrl+Alt+S` on Windows/Linux, `Cmd+,` on macOS).
+2. In the left tree, select **Editor** -> **TextMate Bundles**.
+3. Click the **`+` (Add)** icon.
+4. Select either:
+   - The directory: [`editors/clion/Fool.tmbundle`](editors/clion/Fool.tmbundle)
+   - Or the archive: [`Fool.tmbundle.zip`](Fool.tmbundle.zip)
+5. Click **Apply** -> **OK**. All `.fo`, `.fl`, and `.fex` files will automatically receive full syntax highlighting!
 
 ---
 
@@ -284,10 +337,15 @@ Or test a specific source file:
 ```bash
 ctest --output-on-failure
 ```
-Or run a specific test filter:
+Or run by test filter / label:
 ```bash
-ctest -R foolc_test_examples --output-on-failure
-ctest -R foolc_test_stdlib --output-on-failure
+# Test module templates & conditional compilation (@if def)
+ctest -R foolc_test_import_templates --output-on-failure
+
+# Test by label:
+ctest -L templates --output-on-failure
+ctest -L examples --output-on-failure
+ctest -L stdlib --output-on-failure
 ```
 
 ---

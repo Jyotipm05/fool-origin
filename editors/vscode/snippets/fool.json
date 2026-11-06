@@ -14,6 +14,13 @@
     ],
     "description": "Import a Fool module with #import"
   },
+  "Module Import Template": {
+    "prefix": "import_template",
+    "body": [
+      "#import ${1:module}<${2:PARAM} = ${3:value}>;"
+    ],
+    "description": "Import a Fool module with compile-time template parameters (replaces C++ #define)"
+  },
   "Compile-Time Constant (constx)": {
     "prefix": "constx",
     "body": [
@@ -121,6 +128,13 @@
       "fn ${3:name}(${4:params}) -> ${5:void};"
     ],
     "description": "Declare a foreign ABI or LLVM intrinsic function binding"
+  },
+  "Conditional Compilation Attribute (@if)": {
+    "prefix": "if_def",
+    "body": [
+      "@if def(${1:FLAG}) && (${1:FLAG} == ${2:1})"
+    ],
+    "description": "Compile-time conditional attribute checking module configuration parameters"
   }
 }
 

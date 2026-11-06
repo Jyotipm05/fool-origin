@@ -35,6 +35,8 @@ When creating or modifying a Fool module named `<name>` in a subsystem directory
   #import std::io::sys_file;
   ```
 - **Never import a module's own `.fo` in its companion `.fl`**: An implementation unit implicitly inherits its interface blueprint declarations under the shared `module <name>;` line. Only import *other* external modules.
+- **Use Import Templates to configure dependencies**: Pass compile-time values/types into dependencies with `#import mod<A = ..., B = ...>;`.
+
 
 
 

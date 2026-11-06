@@ -62,6 +62,29 @@ Method declarations do not use implicit hidden `this` pointers. The receiver is 
   #import std::io::posix_ffi;
   ```
 - **No Self-Import in Implementation Units**: An `.fl` (implementation) file implicitly implements the interface defined in its companion `.fo` file under the same `module <name>;` declaration. An `.fl` file must **never** contain an `#import` for its own module/`.fo` file. Imports from *other* modules are allowed.
+- **Parameterized Module Templates & Conditional Directives (`@if def(...)`)**:
+  Fool replaces C++ `#define` configuration hacks with structured, compile-time module templates and import templates:
+
+  **1. Module Template Definition (with default values):**
+  ```fool
+  module name1<ASIO_IOURING_ON = 1, INIT = 0>; // declared with default values
+
+  @if def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)
+  fn func1() {
+      // Activated when ASIO_IOURING_ON is defined and set to 1
+  }
+  ```
+
+  **2. Usage at Consumer Import Sites:**
+  - With explicit compile-time overrides:
+    ```fool
+    #import name1<ASIO_IOURING_ON = 1>;
+    ```
+  - Or using the module's default values:
+    ```fool
+    #import name1;
+    ```
+
 
 
 

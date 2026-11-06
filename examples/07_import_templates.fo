@@ -1,0 +1,22 @@
+//
+// examples/07_import_templates.fo
+// Interface blueprint: demonstrates parameterized module imports (import templates).
+// Replaces C++ #define compile-time configuration injection.
+//
+
+// Module template declaration with default parameter values
+module examples::import_templates<ASIO_IOURING_ON = 1, INIT = 0>;
+
+// Conditional declaration gated by @if def(...) compile-time directive
+@if def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)
+fn iouring_setup() -> bool;
+
+@if def(INIT)
+fn system_init();
+
+class AsyncEngine {
+    ring_fd: i32;
+    active: bool;
+
+    fn start(this &self) -> bool;
+}

@@ -61,6 +61,14 @@
           "match": "\\b#import\\b"
         },
         {
+          "name": "keyword.control.directive.if.fool",
+          "match": "@(if|elif|else)\\b"
+        },
+        {
+          "name": "support.function.builtin.def.fool",
+          "match": "\\bdef\\b(?=\\s*\\()"
+        },
+        {
           "name": "entity.name.function.attribute.fool",
           "match": "@(target|inline|align_as|extern)\\b"
         },
