@@ -1,0 +1,6 @@
+// constx values are range-checked against their declared type.
+module tests::integer_range;
+
+// expect-error: does not fit
+constx SMALL: u8 = 300;
+constx FINE: u8 = 255;

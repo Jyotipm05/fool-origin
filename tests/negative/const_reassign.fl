@@ -1,0 +1,9 @@
+// A const binding can not be assigned after initialisation.
+module tests::const_reassign;
+
+fn run() {
+    const limit = 10;
+    // expect-error: const
+    limit = 20;
+    return;
+}

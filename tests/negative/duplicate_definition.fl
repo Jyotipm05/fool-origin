@@ -1,0 +1,10 @@
+module tests::duplicate_definition;
+
+fn once() -> i32 {
+    return 1;
+}
+
+// expect-error: redefinition
+fn once() -> i32 {
+    return 2;
+}

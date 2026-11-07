@@ -1,0 +1,7 @@
+module tests::unknown_attribute;
+
+// expect-error: unknown attribute
+@frobnicate
+fn nothing() {
+    return;
+}

@@ -1,0 +1,5 @@
+module tests::extern_needs_abi;
+
+// expect-error: extern
+@extern
+fn raw_write(fd: i32) -> i32;

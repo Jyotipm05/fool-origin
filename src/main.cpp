@@ -1,171 +1,322 @@
 //
 // Created by jmbab on 05-11-2026.
 //
+
 /**
  * @file main.cpp
- * @brief Driver entry point verifying the .fo/.fl/.fex classifier, parser, and Pass 0 target pruning.
+ * @brief foolc driver: file mode, project mode and expect-error test mode.
+ *
+ * Exit codes: 0 = success, 1 = diagnostics with errors (or failed expectations), 2 = usage error.
  */
 
-#include <iostream>
-#include <string_view>
-#include <string>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
+#include <memory>
 #include <sstream>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 import fool.common;
+import fool.diagnostics;
 import fool.lexer;
 import fool.ast;
 import fool.parser;
 import fool.sema;
 
-bool test_source_file(const std::filesystem::path& file_path, const fool::TargetConfig& target) {
-    std::cout << "\n========================================\n";
-    std::cout << "Testing: " << file_path.string() << "\n";
-    std::cout << "========================================\n";
+namespace {
 
-    // 1. File Classification
-    fool::FileRole role = fool::classify_fool_file(file_path);
-    std::string_view role_name = (role == fool::FileRole::Interface) ? "Interface (.fo)" :
-                                 (role == fool::FileRole::Implementation) ? "Implementation (.fl)" :
-                                 (role == fool::FileRole::ExternalOverlay) ? "External/Overlay (.fex)" : "Unknown";
-    std::cout << "Role: " << role_name << "\n";
+namespace fs = std::filesystem;
 
-    // 2. Read Source
-    std::ifstream file(file_path);
-    if (!file.is_open()) {
-        std::cerr << "Failed to open file: " << file_path << "\n";
-        return false;
-    }
-    std::stringstream buffer;
-    buffer << file.rdbuf();
-    std::string source_code = buffer.str();
+struct Options {
+    fool::TargetConfig m_target;
+    std::vector<fs::path> m_files;
+    std::vector<fs::path> m_roots;
+    bool m_project{false};
+    bool m_graph{false};
+    bool m_quiet{false};
+};
 
-    // 3. Tokenize & Parse
-    fool::Arena arena;
-    fool::Lexer lexer(source_code, file_path.string());
-    auto tokens = lexer.tokenize_all();
-    std::cout << "Tokens: " << tokens.size() << " tokens generated\n";
+void print_usage() {
+    std::cout <<
+        "usage: foolc [options] [file.fo|file.fl|file.fex ...]\n"
+        "\n"
+        "  Without files, checks the whole workspace (stdlib/ and examples/) in project mode.\n"
+        "\n"
+        "options:\n"
+        "  --target <os>-<arch>   target platform (default: linux-x86_64)\n"
+        "  --project              check every module below the search roots as a unit\n"
+        "  -I <dir>               add a module search root (project mode)\n"
+        "  --graph                print the module compilation order (project mode)\n"
+        "  -q, --quiet            suppress the summary line\n"
+        "  -h, --help             show this help\n"
+        "\n"
+        "Files containing '// expect-error: <text>' comments are checked in test mode: the run\n"
+        "succeeds only if exactly the annotated errors are reported (a comment on its own line\n"
+        "applies to the next line).\n";
+}
 
-    fool::Parser parser(std::move(tokens), arena);
-    fool::ModuleAST* module_ast = parser.parse_module();
-    if (!module_ast) {
-        std::cerr << "Parsing failed for file: " << file_path << "\n";
-        return false;
-    }
-    std::cout << "Parsed " << module_ast->m_declarations.size() << " top-level declarations\n";
+uint8_t pointer_width_for(std::string_view arch) {
+    if (arch == "wasm32" || arch == "i386" || arch == "x86" || arch == "arm" || arch == "riscv32") return 32;
+    return 64;
+}
 
-    // 4. Pass 0 Target Pruning
-    fool::SymbolTablePass0 pass0(target);
-    pass0.collect_declarations(module_ast);
-
-    // 5. Pass 2 Semantic Analysis, Immutability & Compile-Time Branch Pruning
-    fool::TypeCheckerPass2 pass2(pass0);
-    bool sema_ok = pass2.check_module(module_ast);
-    if (!sema_ok) {
-        std::cerr << "Semantic analysis failed with " << pass2.get_error_count() << " error(s) in: "
-                  << file_path << "\n";
-        return false;
-    }
-
-    // 6. Inspect AST
-    auto& interner = fool::StringInterner::get();
-    for (const auto* decl : module_ast->m_declarations) {
-        if (const auto* cb = dynamic_cast<const fool::ConditionalDeclBlock*>(decl)) {
-            std::cout << "  - Compile-Time Block [branches: " << cb->m_branches.size() << "]\n";
-        } else if (const auto* fn = dynamic_cast<const fool::FunctionDeclNode*>(decl)) {
-            std::cout << "  - Function '" << interner.resolve(fn->m_name)
-                      << "' [active: " << (fn->m_is_active ? "YES" : "NO (Pruned)")
-                      << ", async: " << (fn->m_is_async ? "YES" : "NO") << "]\n";
-        } else if (const auto* cls = dynamic_cast<const fool::ClassDeclNode*>(decl)) {
-            std::cout << "  - Class '" << interner.resolve(cls->m_name)
-                      << "' [fields: " << cls->m_fields.size()
-                      << ", methods: " << cls->m_methods.size() << "]\n";
-        } else if (const auto* rs = dynamic_cast<const fool::RulesetDeclNode*>(decl)) {
-            std::cout << "  - Ruleset '" << interner.resolve(rs->m_name)
-                      << "' [methods: " << rs->m_methods.size() << "]\n";
-        } else if (const auto* bp = dynamic_cast<const fool::BlueprintDeclNode*>(decl)) {
-            std::cout << "  - Blueprint '" << interner.resolve(bp->m_name)
-                      << "' [params: " << bp->m_type_params.size() << "]\n";
-        } else if (const auto* var = dynamic_cast<const fool::VarDeclNode*>(decl)) {
-            std::string_view kind_str = (var->m_kind == fool::BindingKind::Constx) ? "constx" :
-                                        (var->m_kind == fool::BindingKind::Immutable) ? "const (immutable)" : "= (mutable)";
-            std::cout << "  - Binding '" << interner.resolve(var->m_name)
-                      << "' [" << kind_str << "]\n";
-        } else if (const auto* imp = dynamic_cast<const fool::ImportDeclNode*>(decl)) {
-            std::cout << "  - Import '#import " << interner.resolve(imp->m_module_path);
-            if (!imp->m_template_args.empty()) {
-                std::cout << "<";
-                for (size_t i = 0; i < imp->m_template_args.size(); ++i) {
-                    if (i > 0) std::cout << ", ";
-                    if (imp->m_template_args[i].m_name != fool::INVALID_SYMBOL_ID) {
-                        std::cout << interner.resolve(imp->m_template_args[i].m_name) << " = ...";
-                    } else {
-                        std::cout << "...";
-                    }
-                }
-                std::cout << ">";
-            }
-            std::cout << ";'\n";
-        }
-    }
+bool parse_target(std::string_view text, fool::TargetConfig& out) {
+    size_t dash = text.find('-');
+    if (dash == std::string_view::npos || dash == 0 || dash + 1 == text.size()) return false;
+    std::string os(text.substr(0, dash));
+    std::string arch(text.substr(dash + 1));
+    out = fool::TargetConfig(os, arch, pointer_width_for(arch));
     return true;
 }
 
-int main(int argc, char* argv[]) {
-    // Target configuration (Linux x86_64 default)
-    fool::TargetConfig target;
-    target.m_os = "linux";
-    target.m_arch = "x86_64";
-    target.m_pointer_width = 64;
+bool read_file(const fs::path& path, std::string& out) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return false;
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    out = buffer.str();
+    return true;
+}
 
-    std::cout << "=== Fool Language Compiler Driver (foolc) ===\n";
-    std::cout << "Active Target: " << target.m_os << " (" << target.m_arch << ", "
-              << target.m_pointer_width << "-bit)\n";
+// ---------------------------------------------------------------------------------------------
+// File mode
+// ---------------------------------------------------------------------------------------------
 
-    if (argc > 1) {
-        int failures = 0;
-        for (int i = 1; i < argc; ++i) {
-            if (!test_source_file(argv[i], target)) {
-                failures++;
+/// Lex, parse, prune and check one file on its own. Imports are not resolved in this mode, so
+/// checks that need symbols from other files are skipped rather than guessed.
+void check_single_file(const fs::path& path, const std::string& source, const fool::TargetConfig& target,
+                       fool::DiagnosticEngine& diag) {
+    diag.set_current_file(path.string());
+    fool::Arena arena;
+    fool::Lexer lexer(source, path.string(), diag);
+    fool::Parser parser(lexer.tokenize_all(), arena, diag);
+    fool::ModuleAST* module = parser.parse_module();
+    fool::assign_source_file(module, path.string());
+    if (diag.has_errors()) return; // do not run semantic checks on a broken tree
+
+    fool::SymbolTablePass0 pass0(target, diag);
+    pass0.define_parameters(module->m_parameters);
+    pass0.collect_declarations(module);
+
+    fool::TypeCheckerPass2 checker(pass0, diag);
+    checker.check_module();
+}
+
+struct Expectation {
+    size_t m_line{0};
+    std::string m_text;
+    bool m_matched{false};
+};
+
+std::vector<Expectation> parse_expectations(const std::string& source) {
+    static constexpr std::string_view marker = "// expect-error:";
+    std::vector<Expectation> expectations;
+    std::istringstream stream(source);
+    std::string line;
+    size_t line_number = 0;
+    std::vector<std::string> pending; // standalone markers apply to the next line
+    while (std::getline(stream, line)) {
+        ++line_number;
+        size_t pos = line.find(marker);
+        if (pos == std::string::npos) {
+            for (auto& text : pending) expectations.push_back({line_number, std::move(text), false});
+            pending.clear();
+            continue;
+        }
+        std::string text = line.substr(pos + marker.size());
+        size_t first = text.find_first_not_of(" \t\r");
+        size_t last = text.find_last_not_of(" \t\r");
+        text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
+        bool standalone = line.find_first_not_of(" \t") == pos;
+        if (standalone) pending.push_back(std::move(text));
+        else expectations.push_back({line_number, std::move(text), false});
+    }
+    return expectations;
+}
+
+/// Returns true when the reported errors match the annotations exactly.
+bool verify_expectations(const fs::path& path, std::vector<Expectation>& expectations,
+                         const fool::DiagnosticEngine& diag) {
+    bool ok = true;
+    std::vector<bool> used(diag.diagnostics().size(), false);
+    for (Expectation& expected : expectations) {
+        for (size_t i = 0; i < diag.diagnostics().size(); ++i) {
+            const fool::Diagnostic& d = diag.diagnostics()[i];
+            if (used[i] || d.m_severity != fool::Severity::Error) continue;
+            if (d.m_span.m_start.m_line == expected.m_line && d.m_message.find(expected.m_text) != std::string::npos) {
+                used[i] = true;
+                expected.m_matched = true;
+                break;
             }
         }
-        return (failures > 0) ? 1 : 0;
+        if (!expected.m_matched) {
+            std::cerr << path.string() << ":" << expected.m_line << ": expected error containing '"
+                      << expected.m_text << "' was not reported\n";
+            ok = false;
+        }
     }
+    for (size_t i = 0; i < diag.diagnostics().size(); ++i) {
+        const fool::Diagnostic& d = diag.diagnostics()[i];
+        if (d.m_severity == fool::Severity::Error && !used[i]) {
+            std::cerr << "unexpected " << d.format() << "\n";
+            ok = false;
+        }
+    }
+    return ok;
+}
 
-    // Default test suite across sample files in examples/
-    std::vector<std::filesystem::path> sample_files = {
-        "examples/01_basics.fo",
-        "examples/01_basics.fl",
-        "examples/02_receivers_and_mutability.fo",
-        "examples/02_receivers_and_mutability.fl",
-        "examples/03_middle_defaults.fo",
-        "examples/03_middle_defaults.fl",
-        "examples/04_rulesets_and_blueprints.fo",
-        "examples/04_rulesets_and_blueprints.fl",
-        "examples/05_target_pruning.fex",
-        "examples/06_full_program.fo",
-        "examples/06_full_program.fl",
-        "examples/07_import_templates.fo",
-        "examples/07_import_templates.fl"
-    };
-
+int run_file_mode(const Options& options) {
     int failures = 0;
-    bool ran_samples = false;
-    for (const auto& sample : sample_files) {
-        if (std::filesystem::exists(sample)) {
-            if (!test_source_file(sample, target)) {
-                failures++;
-            }
-            ran_samples = true;
+    size_t checked = 0;
+    for (const fs::path& path : options.m_files) {
+        std::string source;
+        if (!read_file(path, source)) {
+            std::cerr << "foolc: cannot open '" << path.string() << "'\n";
+            ++failures;
+            continue;
+        }
+        ++checked;
+        std::vector<Expectation> expectations = parse_expectations(source);
+        fool::DiagnosticEngine diag;
+        diag.set_echo(expectations.empty());
+        check_single_file(path, source, options.m_target, diag);
+
+        if (expectations.empty()) {
+            if (diag.has_errors()) ++failures;
+        } else if (!verify_expectations(path, expectations, diag)) {
+            ++failures;
         }
     }
+    if (!options.m_quiet) {
+        std::cout << "foolc: checked " << checked << " file(s) for " << options.m_target.to_string() << ", "
+                  << failures << " failed\n";
+    }
+    return failures == 0 ? 0 : 1;
+}
 
-    if (!ran_samples) {
-        std::cout << "\nNo sample files found in examples/. Run with: foolc <path_to_fool_file>\n";
+// ---------------------------------------------------------------------------------------------
+// Project mode
+// ---------------------------------------------------------------------------------------------
+
+/// Builds the symbol table of one module (all of its files, filtered to the module's own section)
+/// and runs the type checker over it with strict name resolution.
+std::unique_ptr<fool::SymbolTablePass0>
+check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrides, const fool::TargetConfig& target,
+                   fool::DiagnosticEngine& diag,
+                   const std::unordered_map<fool::SymbolID, const fool::SymbolTablePass0*>& built) {
+    auto table = std::make_unique<fool::SymbolTablePass0>(target, diag);
+    table->define_parameters(node.m_parameters, overrides);
+    for (const fool::ModuleFile& file : node.m_files) {
+        table->collect_declarations(file.m_ast, node.m_name);
+    }
+    for (fool::ImportDeclNode* imp : table->import_declarations()) {
+        auto it = built.find(imp->m_module_path);
+        table->add_import(imp, it != built.end() ? it->second : nullptr);
+    }
+    fool::TypeCheckerPass2 checker(*table, diag);
+    checker.set_strict_names(true);
+    checker.check_module();
+    return table;
+}
+
+int run_project_mode(const Options& options) {
+    fool::Arena arena;
+    fool::DiagnosticEngine diag;
+    fool::ModuleGraphPass1 graph(arena, diag, options.m_target);
+    for (const fs::path& root : options.m_roots) graph.add_search_path(root);
+
+    graph.index_search_paths();
+    bool graph_ok = !diag.has_errors();
+    graph_ok = graph.resolve_imports() && graph_ok;
+    graph_ok = graph.sort_topological() && graph_ok;
+    if (!graph_ok) {
+        std::cerr << "foolc: module graph has errors; skipping semantic checks\n";
         return 1;
     }
 
-    return (failures > 0) ? 1 : 0;
+    if (options.m_graph) {
+        std::cout << "module compilation order (" << options.m_target.to_string() << "):\n";
+        for (fool::SymbolID id : graph.get_compilation_order()) {
+            const fool::ModuleNode* node = graph.get_module(id);
+            std::cout << "  " << fool::StringInterner::get().resolve(id) << "  [" << node->m_files.size() << " file(s)";
+            if (!node->m_dependencies.empty()) {
+                std::cout << "; imports";
+                for (fool::SymbolID dep : node->m_dependencies) std::cout << " " << fool::StringInterner::get().resolve(dep);
+            }
+            std::cout << "]\n";
+        }
+    }
+
+    std::vector<std::unique_ptr<fool::SymbolTablePass0>> owned;
+    std::unordered_map<fool::SymbolID, const fool::SymbolTablePass0*> built;
+    size_t instantiations = 0;
+    for (fool::SymbolID id : graph.get_compilation_order()) {
+        const fool::ModuleNode* node = graph.get_module(id);
+        owned.push_back(check_module_group(*node, {}, options.m_target, diag, built));
+        built[id] = owned.back().get();
+
+        // Each distinct set of import template arguments is checked as its own instantiation, so
+        // @if branches that only become active for that configuration are verified too.
+        for (const fool::ModuleInstantiation& inst : node->m_instantiations) {
+            ++instantiations;
+            size_t before = diag.error_count();
+            check_module_group(*node, inst.m_overrides, options.m_target, diag, built);
+            if (diag.error_count() != before) std::cerr << "note: errors above occurred in instantiation '" << inst.m_key << "'\n";
+        }
+    }
+
+    if (!options.m_quiet) {
+        std::cout << "foolc: checked " << graph.modules().size() << " module(s) from " << graph.indexed_file_count()
+                  << " file(s) for " << options.m_target.to_string() << " (" << instantiations
+                  << " instantiation(s)), " << diag.error_count() << " error(s)\n";
+    }
+    return diag.has_errors() ? 1 : 0;
+}
+
+} // namespace
+
+int main(const int argc, char** argv) {
+    Options options;
+    for (int i = 1; i < argc; ++i) {
+        if (std::string arg = argv[i]; arg == "-h" || arg == "--help") {
+            print_usage();
+            return 0;
+        } else if (arg == "--target" && i + 1 < argc) {
+            if (!parse_target(argv[++i], options.m_target)) {
+                std::cerr << "foolc: invalid --target '" << argv[i] << "' (expected <os>-<arch>, e.g. linux-x86_64)\n";
+                return 2;
+            }
+        } else if (arg == "-I" && i + 1 < argc) {
+            options.m_roots.emplace_back(argv[++i]);
+        } else if (arg == "--project") {
+            options.m_project = true;
+        } else if (arg == "--graph") {
+            options.m_graph = true;
+            options.m_project = true;
+        } else if (arg == "-q" || arg == "--quiet") {
+            options.m_quiet = true;
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::cerr << "foolc: unknown option '" << arg << "' (see --help)\n";
+            return 2;
+        } else {
+            options.m_files.emplace_back(arg);
+        }
+    }
+
+    if (options.m_files.empty()) options.m_project = true; // default: check the whole workspace
+    if (options.m_project) {
+        if (options.m_roots.empty()) {
+            options.m_roots.emplace_back("stdlib");
+            options.m_roots.emplace_back("examples");
+        }
+        return run_project_mode(options);
+    }
+    return run_file_mode(options);
 }

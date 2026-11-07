@@ -1,0 +1,20 @@
+// A `this const& self` receiver can not be used to mutate the object.
+module tests::const_receiver_mutation;
+
+class Counter {
+    value: i32;
+
+    fn peek(this const& self) -> i32;
+    fn bump(this &self);
+}
+
+fn Counter::peek(this const& self) -> i32 {
+    // expect-error: const
+    self.value = 1;
+    return self.value;
+}
+
+fn Counter::bump(this &self) {
+    self.value = self.value + 1;
+    return;
+}

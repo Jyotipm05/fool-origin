@@ -1,0 +1,7 @@
+module tests::duplicate_field;
+
+class Point {
+    x: i32;
+    // expect-error: duplicate
+    x: i32;
+}

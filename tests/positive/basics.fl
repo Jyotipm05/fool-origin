@@ -1,0 +1,61 @@
+// Constructs that must be accepted without diagnostics.
+module tests::basics;
+
+constx LIMIT: u8 = 200 + 55;
+constx FLAG: bool = LIMIT == 255 && !(1 > 2);
+
+class Counter {
+    value: i32;
+
+    fn peek(this const& self) -> i32;
+    fn bump(this &self);
+    fn finish(this self);
+}
+
+fn Counter::peek(this const& self) -> i32 {
+    return self.value;
+}
+
+fn Counter::bump(this &self) {
+    self.value = self.value + 1;
+    return;
+}
+
+fn Counter::finish(this self) {
+    return;
+}
+
+fn connect(host: i32, port: i32 = 80, retries: i32) -> i32 {
+    return host + port + retries;
+}
+
+fn classify(n: i32) -> i32 {
+    if (n < 0) {
+        return -1;
+    } else {
+        return 1;
+    }
+}
+
+fn run() -> i32 {
+    var c = Counter { value: 0 };
+    c.bump();
+    var seen = c.peek();
+    var total = connect(1, retries: 3);
+    var i = 0;
+    while (i < 3) {
+        i = i + 1;
+        if (i == 2) {
+            continue;
+        }
+        if (i > 5) {
+            break;
+        }
+    }
+    c.finish();
+    @if (def(MISSING)) {
+        return 1;
+    } @else {
+        return classify(seen) + total;
+    }
+}

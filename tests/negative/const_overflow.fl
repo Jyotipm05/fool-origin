@@ -1,0 +1,4 @@
+module tests::const_overflow;
+
+// expect-error: does not fit
+constx BIG: i32 = 2147483647 + 1;

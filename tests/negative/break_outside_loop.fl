@@ -1,0 +1,7 @@
+module tests::break_outside_loop;
+
+fn run() {
+    // expect-error: break
+    break;
+    return;
+}

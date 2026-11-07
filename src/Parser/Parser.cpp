@@ -1,661 +1,535 @@
 //
 // Created by jmbab on 05-11-2026.
 //
+
 /**
  * @file Parser.cpp
- * @brief Implementation unit for the Fool Pratt parser and declaration rules.
+ * @brief Parser core: token cursor, Pratt expression parser, types and generic argument lists.
  */
 
 module;
 
-#include <iostream>
+#include <cerrno>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 module fool.parser;
 
 namespace fool {
 
-Parser::Parser(std::vector<Token> tokens, Arena& arena)
-    : m_tokens(std::move(tokens)), m_arena(arena) {}
+namespace {
+
+/// Interns a lexeme and returns a view that outlives the source buffer.
+std::string_view stable_text(std::string_view text) {
+    auto& interner = StringInterner::get();
+    return interner.resolve(interner.intern(text));
+}
+
+std::string strip_underscores(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (char c : text) {
+        if (c != '_') out.push_back(c);
+    }
+    return out;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------------------------
+// Token cursor
+// ---------------------------------------------------------------------------------------------
+
+Parser::Parser(std::vector<Token> tokens, Arena& arena, DiagnosticEngine& diag)
+    : m_tokens(std::move(tokens)), m_arena(arena), m_diag(diag) {
+    if (m_tokens.empty() || m_tokens.back().m_kind != TokenKind::Eof) {
+        m_tokens.emplace_back(TokenKind::Eof, INVALID_SYMBOL_ID, std::string_view{}, SourceSpan{});
+    }
+}
 
 const Token& Parser::current() const {
-    return m_tokens[m_cursor];
+    return m_tokens[m_cursor < m_tokens.size() ? m_cursor : m_tokens.size() - 1];
 }
 
 const Token& Parser::peek(size_t ahead) const {
-    if (m_cursor + ahead >= m_tokens.size()) return m_tokens.back();
-    return m_tokens[m_cursor + ahead];
+    size_t idx = m_cursor + ahead;
+    return m_tokens[idx < m_tokens.size() ? idx : m_tokens.size() - 1];
+}
+
+SourceLocation Parser::previous_end() const {
+    if (m_cursor == 0) return current().m_span.m_start;
+    return m_tokens[m_cursor - 1].m_span.m_end;
 }
 
 Token Parser::advance() {
-    if (!is_at_end()) m_cursor++;
-    return m_tokens[m_cursor - 1];
+    Token tok = current();
+    if (!is_at_end()) ++m_cursor;
+    return tok;
 }
 
-bool Parser::check(TokenKind k) const {
-    return current().m_kind == k;
+bool Parser::check(TokenKind k) const { return current().m_kind == k; }
+
+bool Parser::check_identifier(std::string_view text) const {
+    return current().m_kind == TokenKind::Identifier && current().m_raw_lexeme == text;
 }
 
-bool Parser::is_at_end() const {
-    return current().m_kind == TokenKind::Eof;
+bool Parser::match(TokenKind k) {
+    if (!check(k)) return false;
+    advance();
+    return true;
+}
+
+bool Parser::is_at_end() const { return current().m_kind == TokenKind::Eof; }
+
+void Parser::error(const SourceSpan& span, std::string message) {
+    if (m_speculation_depth > 0) {
+        m_speculation_failed = true;
+        return;
+    }
+    m_diag.error(span, std::move(message));
+}
+
+void Parser::error_here(std::string message) { error(current().m_span, std::move(message)); }
+
+SourceSpan Parser::span_from(SourceLocation start) const { return SourceSpan{start, previous_end()}; }
+
+void Parser::begin_speculation() {
+    ++m_speculation_depth;
+    m_speculation_failed = false;
+}
+
+bool Parser::end_speculation() {
+    bool ok = !m_speculation_failed;
+    --m_speculation_depth;
+    m_speculation_failed = false;
+    return ok;
 }
 
 Token Parser::consume(TokenKind k, std::string_view err_msg) {
     if (check(k)) return advance();
-    std::cerr << "Syntax Error at line " << current().m_span.m_start.m_line
-              << ":" << current().m_span.m_start.m_column << " - " << err_msg << "\n";
-    // If not at block/paren delimiter or EOF, advance past the unexpected token to prevent infinite loops
-    if (!is_at_end() && !check(TokenKind::CloseBrace) && !check(TokenKind::CloseParen)) {
-        return advance();
-    }
-    return current();
+    error_here(std::string(err_msg) + ", found '" + std::string(current().m_raw_lexeme.empty()
+              ? token_kind_to_str(current().m_kind) : current().m_raw_lexeme) + "'");
+    return Token{TokenKind::Invalid, INVALID_SYMBOL_ID, std::string_view{}, current().m_span};
 }
 
+// ---------------------------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------------------------
+
+/// Binding power of binary operators; -1 for tokens that are not binary operators here.
 int Parser::get_precedence(TokenKind k) {
     switch (k) {
+        case TokenKind::Equal:         return 1;  // assignment (right associative)
+        case TokenKind::DotDot:        return 2;  // range
+        case TokenKind::PipePipe:      return 3;
+        case TokenKind::AmpAmp:        return 4;
+        case TokenKind::EqualEqual:
+        case TokenKind::ExclaimEqual:
+        case TokenKind::Less:
+        case TokenKind::LessEqual:
+        case TokenKind::Greater:
+        case TokenKind::GreaterEqual:  return 5;
+        case TokenKind::Pipe:          return 6;
+        case TokenKind::Caret:         return 7;
+        case TokenKind::Ampersand:     return 8;
         case TokenKind::Plus:
-        case TokenKind::Minus: return 10;
+        case TokenKind::Minus:         return 10;
         case TokenKind::Star:
-        case TokenKind::Slash: return 20;
-        case TokenKind::OpenParen: return 30; // Call precedence
-        default: return 0;
+        case TokenKind::Slash:
+        case TokenKind::Percent:       return 20;
+        case TokenKind::KwAs:          return 25; // handled specially: right-hand side is a type
+        default:                       return -1;
     }
-}
-
-ExprNode* Parser::parse_primary() {
-    if (check(TokenKind::IntegerLiteral)) {
-        Token tok = advance();
-        int64_t val = std::stoll(std::string(tok.m_raw_lexeme));
-        auto* node = m_arena.create<IntegerLiteralExpr>(val);
-        node->m_span = tok.m_span;
-        return node;
-    }
-    if (check(TokenKind::FloatLiteral)) {
-        Token tok = advance();
-        double val = std::stod(std::string(tok.m_raw_lexeme));
-        auto* node = m_arena.create<FloatLiteralExpr>(val);
-        node->m_span = tok.m_span;
-        return node;
-    }
-    if (check(TokenKind::StringLiteral)) {
-        Token tok = advance();
-        auto* node = m_arena.create<StringLiteralExpr>(tok.m_raw_lexeme);
-        node->m_span = tok.m_span;
-        return node;
-    }
-    if (check(TokenKind::KwTrue) || check(TokenKind::KwFalse)) {
-        Token tok = advance();
-        auto* node = m_arena.create<BooleanLiteralExpr>(tok.m_kind == TokenKind::KwTrue);
-        node->m_span = tok.m_span;
-        return node;
-    }
-    if (check(TokenKind::Identifier)) {
-        Token tok = advance();
-        auto* node = m_arena.create<IdentifierExpr>(tok.m_symbol_id);
-        node->m_span = tok.m_span;
-        return node;
-    }
-    if (check(TokenKind::OpenParen)) {
-        advance();
-        ExprNode* expr = parse_expression(0);
-        consume(TokenKind::CloseParen, "Expected ')'");
-        return expr;
-    }
-    return nullptr;
 }
 
 ExprNode* Parser::parse_expression(int min_precedence) {
-    ExprNode* lhs = parse_primary();
+    SourceLocation start = current().m_span.m_start;
+    ExprNode* lhs = parse_unary();
+    if (lhs == nullptr) return nullptr;
 
-    while (!is_at_end()) {
+    while (true) {
         TokenKind op = current().m_kind;
+        if (op == TokenKind::Greater && m_in_angle_list) break; // '>' closes a generic list
         int prec = get_precedence(op);
-        if (prec <= min_precedence) break;
+        if (prec < 0 || prec <= min_precedence) break;
+        advance();
 
-        if (op == TokenKind::OpenParen) {
-            advance();
-            auto* call = m_arena.create<CallExpr>();
-            call->m_callee = lhs;
-            while (!check(TokenKind::CloseParen) && !is_at_end()) {
-                size_t prev_cursor = m_cursor;
-                CallArg arg;
-                if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Colon) {
-                    arg.m_label = advance().m_symbol_id;
-                    advance(); // consume ':'
-                }
-                arg.m_expr = parse_expression(0);
-                call->m_args.push_back(arg);
-                if (!check(TokenKind::CloseParen)) consume(TokenKind::Comma, "Expected ','");
-                if (m_cursor == prev_cursor && !is_at_end()) advance();
-            }
-            consume(TokenKind::CloseParen, "Expected ')' after call arguments");
-            lhs = call;
-        } else {
-            advance();
-            ExprNode* rhs = parse_expression(prec);
-            auto* bin = m_arena.create<BinaryExpr>(op, lhs, rhs);
-            lhs = bin;
+        if (op == TokenKind::KwAs) {
+            TypeNode* target = parse_type(/*allow_generic_args=*/false);
+            auto* cast = m_arena.create<CastExpr>(lhs, target);
+            cast->m_span = span_from(start);
+            lhs = cast;
+            continue;
         }
+
+        bool right_assoc = (op == TokenKind::Equal);
+        ExprNode* rhs = parse_expression(right_assoc ? prec - 1 : prec);
+        if (rhs == nullptr) return lhs;
+        auto* bin = m_arena.create<BinaryExpr>(op, lhs, rhs);
+        bin->m_span = span_from(start);
+        lhs = bin;
     }
     return lhs;
 }
 
-AttributeNode Parser::parse_attribute() {
+ExprNode* Parser::parse_unary() {
     SourceLocation start = current().m_span.m_start;
-    consume(TokenKind::At, "Expected '@'");
-    Token name_tok = current();
-    if (check(TokenKind::Identifier) || check(TokenKind::KwIf)) {
+    TokenKind k = current().m_kind;
+    if (k == TokenKind::Bang || k == TokenKind::Minus || k == TokenKind::Ampersand ||
+        k == TokenKind::Star || k == TokenKind::KwAwait) {
         advance();
-    } else {
-        name_tok = consume(TokenKind::Identifier, "Expected attribute name");
+        ExprNode* operand = parse_unary();
+        if (operand == nullptr) return nullptr;
+        auto* un = m_arena.create<UnaryExpr>(k, operand);
+        un->m_span = span_from(start);
+        return un;
     }
-    AttributeNode attr;
-    auto& interner = StringInterner::get();
-    attr.m_name = (name_tok.m_kind == TokenKind::KwIf) ? interner.intern("if") : name_tok.m_symbol_id;
-
-    if (check(TokenKind::OpenParen)) {
-        advance();
-        if (interner.resolve(attr.m_name) == "if") {
-            // Raw condition string supporting nested parens, def(...), &&, ==, etc.
-            int paren_depth = 1;
-            std::string condition;
-            while (paren_depth > 0 && !is_at_end()) {
-                if (check(TokenKind::OpenParen)) paren_depth++;
-                else if (check(TokenKind::CloseParen)) {
-                    paren_depth--;
-                    if (paren_depth == 0) break;
-                }
-                if (!condition.empty() && current().m_kind != TokenKind::Dot && current().m_kind != TokenKind::OpenParen) {
-                    condition += " ";
-                }
-                condition += current().m_raw_lexeme;
-                advance();
-            }
-            consume(TokenKind::CloseParen, "Expected ')' after @if condition");
-            attr.m_args.push_back(AttributeArg(interner.intern("condition"), interner.resolve(interner.intern(condition))));
-        } else {
-            while (!check(TokenKind::CloseParen) && !is_at_end()) {
-                size_t prev_cursor = m_cursor;
-                AttributeArg arg;
-                if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
-                    arg.m_key = advance().m_symbol_id;
-                    advance(); // consume '='
-                }
-                Token val = advance();
-                arg.m_value = val.m_raw_lexeme;
-                attr.m_args.push_back(arg);
-                if (!check(TokenKind::CloseParen)) consume(TokenKind::Comma, "Expected ','");
-                if (m_cursor == prev_cursor && !is_at_end()) advance();
-            }
-            consume(TokenKind::CloseParen, "Expected ')' after attribute arguments");
-        }
-    }
-    attr.m_span = {start, current().m_span.m_end};
-    return attr;
+    ExprNode* primary = parse_primary();
+    if (primary == nullptr) return nullptr;
+    return parse_postfix(primary);
 }
 
-FunctionDeclNode* Parser::parse_function(bool is_async) {
-    consume(TokenKind::KwFn, "Expected 'fn'");
-    Token name = consume(TokenKind::Identifier, "Expected function name");
-    auto* fn = m_arena.create<FunctionDeclNode>();
-    fn->m_name = name.m_symbol_id;
-    fn->m_is_async = is_async;
-
-    consume(TokenKind::OpenParen, "Expected '(' after function name");
-
-    // Explicit Receiver Check:
-    // fn len(this const& self) -> ByConstRef (Rust-like strict immutable receiver)
-    // fn append(this &self)    -> ByMutRef   (Default mutable receiver)
-    // fn destroy(this self)    -> ByValue    (Consuming move receiver)
-    if (check(TokenKind::KwThis)) {
-        advance();
-        if (check(TokenKind::KwConst) && peek().m_kind == TokenKind::Ampersand) {
-            advance(); advance();
-            fn->m_receiver.m_kind = ReceiverKind::ByConstRef;
-        } else if (check(TokenKind::Ampersand)) {
-            advance();
-            fn->m_receiver.m_kind = ReceiverKind::ByMutRef;
-        } else {
-            fn->m_receiver.m_kind = ReceiverKind::ByValue;
-        }
-        Token self_tok = consume(TokenKind::Identifier, "Expected receiver name (e.g., 'self')");
-        fn->m_receiver.m_self_name = self_tok.m_symbol_id;
-        if (check(TokenKind::Comma)) advance();
-    }
-
-    // Parameters (supporting middle and trailing defaults)
+void Parser::parse_call_arguments(CallExpr* call) {
+    bool saved_no_struct = m_no_struct_literal;
+    bool saved_angle = m_in_angle_list;
+    m_no_struct_literal = false;
+    m_in_angle_list = false;
     while (!check(TokenKind::CloseParen) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        ParameterDecl param;
-        param.m_name = consume(TokenKind::Identifier, "Expected parameter name").m_symbol_id;
-        consume(TokenKind::Colon, "Expected ':'");
-        param.m_type_name = consume(TokenKind::Identifier, "Expected parameter type").m_symbol_id;
-
-        if (check(TokenKind::Equal)) {
+        CallArg arg;
+        arg.m_span.m_start = current().m_span.m_start;
+        if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Colon) {
+            arg.m_label = current().m_symbol_id;
             advance();
-            param.m_default_value = parse_expression(0);
-        }
-        fn->m_params.push_back(param);
-        if (!check(TokenKind::CloseParen)) consume(TokenKind::Comma, "Expected ','");
-
-        if (m_cursor == prev_cursor && !is_at_end()) advance();
-    }
-    consume(TokenKind::CloseParen, "Expected ')'");
-
-    if (check(TokenKind::Arrow)) {
-        advance();
-        fn->m_return_type = consume(TokenKind::Identifier, "Expected return type").m_symbol_id;
-    }
-
-    if (check(TokenKind::Semicolon)) {
-        // Interface declaration without body (e.g. inside .fo or ruleset)
-        advance();
-        return fn;
-    }
-
-    consume(TokenKind::OpenBrace, "Expected '{' or ';'");
-    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        fn->m_body.push_back(parse_statement());
-        if (m_cursor == prev_cursor && !is_at_end()) {
             advance();
         }
+        arg.m_expr = parse_expression();
+        arg.m_span.m_end = previous_end();
+        if (arg.m_expr == nullptr) break;
+        call->m_args.push_back(arg);
+        if (!match(TokenKind::Comma)) break;
     }
-    consume(TokenKind::CloseBrace, "Expected '}'");
-    return fn;
+    m_no_struct_literal = saved_no_struct;
+    m_in_angle_list = saved_angle;
 }
 
-RulesetDeclNode* Parser::parse_ruleset() {
-    consume(TokenKind::KwRuleset, "Expected 'ruleset'");
-    Token name = consume(TokenKind::Identifier, "Expected ruleset name");
-    auto* rs = m_arena.create<RulesetDeclNode>();
-    rs->m_name = name.m_symbol_id;
-
-    if (check(TokenKind::Less)) {
-        advance();
-        rs->m_type_param = consume(TokenKind::Identifier, "Expected type parameter").m_symbol_id;
-        if (check(TokenKind::Colon)) {
+ExprNode* Parser::parse_postfix(ExprNode* base) {
+    SourceLocation start = base->m_span.m_start;
+    while (true) {
+        if (check(TokenKind::Dot)) {
             advance();
-            rs->m_bound = consume(TokenKind::Identifier, "Expected bound name").m_symbol_id;
-        }
-        consume(TokenKind::Greater, "Expected '>'");
-    }
-
-    consume(TokenKind::OpenBrace, "Expected '{'");
-    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        if (check(TokenKind::KwFn)) {
-            rs->m_methods.push_back(parse_function(false));
+            Token member = consume(TokenKind::Identifier, "Expected member name after '.'");
+            if (member.m_kind == TokenKind::Invalid) return base;
+            auto* mem = m_arena.create<MemberExpr>(base, member.m_symbol_id);
+            mem->m_span = span_from(start);
+            base = mem;
+        } else if (check(TokenKind::OpenParen)) {
+            advance();
+            auto* call = m_arena.create<CallExpr>();
+            call->m_callee = base;
+            parse_call_arguments(call);
+            consume(TokenKind::CloseParen, "Expected ')' after call arguments");
+            call->m_span = span_from(start);
+            base = call;
+        } else if (check(TokenKind::OpenBracket)) {
+            advance();
+            bool saved_no_struct = m_no_struct_literal;
+            bool saved_angle = m_in_angle_list;
+            m_no_struct_literal = false;
+            m_in_angle_list = false;
+            ExprNode* index = parse_expression();
+            m_no_struct_literal = saved_no_struct;
+            m_in_angle_list = saved_angle;
+            consume(TokenKind::CloseBracket, "Expected ']' after index expression");
+            if (index == nullptr) return base;
+            auto* idx = m_arena.create<IndexExpr>(base, index);
+            idx->m_span = span_from(start);
+            base = idx;
         } else {
-            advance();
+            return base;
         }
-        if (m_cursor == prev_cursor && !is_at_end()) advance();
     }
-    consume(TokenKind::CloseBrace, "Expected '}'");
-    return rs;
 }
 
-ClassDeclNode* Parser::parse_class() {
-    consume(TokenKind::KwClass, "Expected 'class'");
-    Token name = consume(TokenKind::Identifier, "Expected class name");
-    auto* cls = m_arena.create<ClassDeclNode>();
-    cls->m_name = name.m_symbol_id;
+ExprNode* Parser::parse_number() {
+    Token tok = advance();
+    std::string text = strip_underscores(tok.m_raw_lexeme);
+    SourceLocation start = tok.m_span.m_start;
 
+    if (tok.m_kind == TokenKind::FloatLiteral) {
+        auto* lit = m_arena.create<FloatLiteralExpr>(std::strtod(text.c_str(), nullptr));
+        lit->m_span = span_from(start);
+        return lit;
+    }
+
+    int base = 10;
+    std::string digits = text;
+    if (text.size() > 2 && text[0] == '0' && (text[1] == 'x' || text[1] == 'X')) {
+        base = 16;
+        digits = text.substr(2);
+    } else if (text.size() > 2 && text[0] == '0' && (text[1] == 'b' || text[1] == 'B')) {
+        base = 2;
+        digits = text.substr(2);
+    }
+    errno = 0;
+    unsigned long long value = std::strtoull(digits.c_str(), nullptr, base);
+    if (errno == ERANGE) {
+        error(tok.m_span, "integer literal '" + std::string(tok.m_raw_lexeme) + "' is out of range");
+        value = 0;
+    }
+    auto* lit = m_arena.create<IntegerLiteralExpr>(static_cast<int64_t>(value));
+    lit->m_span = span_from(start);
+    return lit;
+}
+
+bool Parser::looks_like_struct_body() const {
+    if (!check(TokenKind::OpenBrace)) return false;
+    if (peek().m_kind == TokenKind::CloseBrace) return true;
+    return peek().m_kind == TokenKind::Identifier && peek(2).m_kind == TokenKind::Colon;
+}
+
+ExprNode* Parser::parse_intrinsic_call() {
+    SourceLocation start = current().m_span.m_start;
+    advance(); // '@'
+    Token name = consume(TokenKind::Identifier, "Expected intrinsic name after '@'");
+    if (name.m_kind == TokenKind::Invalid) return nullptr;
+    auto* call = m_arena.create<IntrinsicCallExpr>();
+    call->m_name = name.m_symbol_id;
+    consume(TokenKind::OpenParen, "Expected '(' after intrinsic name");
+    bool saved_no_struct = m_no_struct_literal;
+    bool saved_angle = m_in_angle_list;
+    m_no_struct_literal = false;
+    m_in_angle_list = false;
+    while (!check(TokenKind::CloseParen) && !is_at_end()) {
+        ExprNode* arg = parse_expression();
+        if (arg == nullptr) break;
+        call->m_args.push_back(arg);
+        if (!match(TokenKind::Comma)) break;
+    }
+    m_no_struct_literal = saved_no_struct;
+    m_in_angle_list = saved_angle;
+    consume(TokenKind::CloseParen, "Expected ')' after intrinsic arguments");
+    call->m_span = span_from(start);
+    return call;
+}
+
+ExprNode* Parser::parse_path_expression() {
+    SourceLocation start = current().m_span.m_start;
+    std::vector<SymbolID> segments;
+    std::vector<GenericArg> generic_args;
+    segments.push_back(advance().m_symbol_id);
+
+    // `Atomic<u32>::new(...)` / `Mutex<T> { ... }`: a '<' only opens generic arguments when the
+    // matching '>' is followed by '::' or a struct body; otherwise it is the less-than operator.
     if (check(TokenKind::Less)) {
-        advance();
-        while (!check(TokenKind::Greater) && !is_at_end()) {
-            advance();
-        }
-        consume(TokenKind::Greater, "Expected '>'");
-    }
-
-    consume(TokenKind::OpenBrace, "Expected '{'");
-    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        if (check(TokenKind::KwFn)) {
-            cls->m_methods.push_back(parse_function(false));
-        } else if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Colon) {
-            ParameterDecl field;
-            field.m_name = advance().m_symbol_id;
-            advance(); // consume ':'
-            field.m_type_name = consume(TokenKind::Identifier, "Expected field type").m_symbol_id;
-            consume(TokenKind::Semicolon, "Expected ';'");
-            cls->m_fields.push_back(field);
+        size_t save = m_cursor;
+        begin_speculation();
+        std::vector<GenericArg> args = parse_generic_args();
+        bool ok = end_speculation();
+        ok = ok && (check(TokenKind::DoubleColon) ||
+                    (!m_no_struct_literal && looks_like_struct_body()));
+        if (ok) {
+            generic_args = std::move(args);
         } else {
+            m_cursor = save;
+        }
+    }
+
+    while (check(TokenKind::DoubleColon) && peek().m_kind == TokenKind::Identifier) {
+        advance();
+        segments.push_back(advance().m_symbol_id);
+    }
+
+    if (!m_no_struct_literal && looks_like_struct_body()) {
+        auto* type = m_arena.create<TypeNode>(TypeNodeKind::Path);
+        type->m_path = segments;
+        type->m_generic_args = generic_args;
+        type->m_span = span_from(start);
+
+        auto* lit = m_arena.create<StructLiteralExpr>();
+        lit->m_type = type;
+        advance(); // '{'
+        bool saved_angle = m_in_angle_list;
+        m_in_angle_list = false;
+        while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+            FieldInit field;
+            field.m_span.m_start = current().m_span.m_start;
+            Token name = consume(TokenKind::Identifier, "Expected field name in struct literal");
+            if (name.m_kind == TokenKind::Invalid) break;
+            field.m_name = name.m_symbol_id;
+            consume(TokenKind::Colon, "Expected ':' after field name");
+            field.m_value = parse_expression();
+            field.m_span.m_end = previous_end();
+            if (field.m_value == nullptr) break;
+            lit->m_fields.push_back(field);
+            if (!match(TokenKind::Comma)) break;
+        }
+        m_in_angle_list = saved_angle;
+        consume(TokenKind::CloseBrace, "Expected '}' after struct literal");
+        lit->m_span = span_from(start);
+        return lit;
+    }
+
+    if (segments.size() == 1 && generic_args.empty()) {
+        auto* id = m_arena.create<IdentifierExpr>(segments.front());
+        id->m_span = span_from(start);
+        return id;
+    }
+    auto* path = m_arena.create<PathExpr>();
+    path->m_segments = std::move(segments);
+    path->m_generic_args = std::move(generic_args);
+    path->m_span = span_from(start);
+    return path;
+}
+
+ExprNode* Parser::parse_primary() {
+    SourceLocation start = current().m_span.m_start;
+    switch (current().m_kind) {
+        case TokenKind::IntegerLiteral:
+        case TokenKind::FloatLiteral:
+            return parse_number();
+        case TokenKind::StringLiteral: {
+            Token tok = advance();
+            auto* lit = m_arena.create<StringLiteralExpr>(stable_text(tok.m_raw_lexeme));
+            lit->m_span = span_from(start);
+            return lit;
+        }
+        case TokenKind::KwTrue:
+        case TokenKind::KwFalse: {
+            bool value = (advance().m_kind == TokenKind::KwTrue);
+            auto* lit = m_arena.create<BooleanLiteralExpr>(value);
+            lit->m_span = span_from(start);
+            return lit;
+        }
+        case TokenKind::Identifier:
+            return parse_path_expression();
+        case TokenKind::At:
+            return parse_intrinsic_call();
+        case TokenKind::OpenParen: {
             advance();
+            bool saved_no_struct = m_no_struct_literal;
+            bool saved_angle = m_in_angle_list;
+            m_no_struct_literal = false;
+            m_in_angle_list = false;
+            ExprNode* inner = parse_expression();
+            m_no_struct_literal = saved_no_struct;
+            m_in_angle_list = saved_angle;
+            consume(TokenKind::CloseParen, "Expected ')' to close parenthesized expression");
+            return inner;
         }
-        if (m_cursor == prev_cursor && !is_at_end()) advance();
+        default:
+            error_here("Expected expression, found '" + std::string(current().m_raw_lexeme.empty()
+                       ? token_kind_to_str(current().m_kind) : current().m_raw_lexeme) + "'");
+            return nullptr;
     }
-    consume(TokenKind::CloseBrace, "Expected '}'");
-    return cls;
 }
 
-BlueprintDeclNode* Parser::parse_blueprint() {
-    consume(TokenKind::KwBlueprint, "Expected 'blueprint'");
-    Token name = consume(TokenKind::Identifier, "Expected blueprint name");
-    auto* bp = m_arena.create<BlueprintDeclNode>();
-    bp->m_name = name.m_symbol_id;
+// ---------------------------------------------------------------------------------------------
+// Types and generics
+// ---------------------------------------------------------------------------------------------
 
-    if (check(TokenKind::Less)) {
+TypeNode* Parser::parse_type(bool allow_generic_args) {
+    SourceLocation start = current().m_span.m_start;
+
+    if (match(TokenKind::Bang)) {
+        auto* never = m_arena.create<TypeNode>(TypeNodeKind::Never);
+        never->m_span = span_from(start);
+        return never;
+    }
+
+    bool is_const = false;
+    if (check(TokenKind::KwConst) &&
+        (peek().m_kind == TokenKind::Star || peek().m_kind == TokenKind::Ampersand)) {
         advance();
-        while (!check(TokenKind::Greater) && !is_at_end()) {
-            ParameterDecl param;
-            param.m_name = consume(TokenKind::Identifier, "Expected template param name").m_symbol_id;
-            if (check(TokenKind::Colon)) {
-                advance();
-                param.m_type_name = consume(TokenKind::Identifier, "Expected param type").m_symbol_id;
-            }
-            if (check(TokenKind::Equal)) {
-                advance();
-                param.m_default_value = parse_expression(0);
-            }
-            bp->m_type_params.push_back(param);
-            if (!check(TokenKind::Greater)) consume(TokenKind::Comma, "Expected ','");
-        }
-        consume(TokenKind::Greater, "Expected '>'");
+        is_const = true;
     }
-
-    consume(TokenKind::OpenBrace, "Expected '{'");
-    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        DeclNode* decl = parse_declaration();
-        if (decl) bp->m_declarations.push_back(decl);
-        if (m_cursor == prev_cursor && !is_at_end()) advance();
-    }
-    consume(TokenKind::CloseBrace, "Expected '}'");
-    return bp;
-}
-
-EnumDeclNode* Parser::parse_enum() {
-    consume(TokenKind::KwEnum, "Expected 'enum'");
-    Token name = consume(TokenKind::Identifier, "Expected enum name");
-    auto* en = m_arena.create<EnumDeclNode>();
-    en->m_name = name.m_symbol_id;
-
-    consume(TokenKind::OpenBrace, "Expected '{'");
-    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        if (check(TokenKind::Identifier)) {
-            en->m_variants.push_back(advance().m_symbol_id);
-            if (check(TokenKind::Comma)) advance();
-        } else {
-            advance();
-        }
-        if (m_cursor == prev_cursor && !is_at_end()) advance();
-    }
-    consume(TokenKind::CloseBrace, "Expected '}'");
-    return en;
-}
-
-VarDeclNode* Parser::parse_var_decl() {
-    BindingKind kind = BindingKind::Mutable;
-    if (check(TokenKind::KwConstx)) {
-        kind = BindingKind::Constx;
+    if (check(TokenKind::Star) || check(TokenKind::Ampersand)) {
+        TypeNodeKind kind = check(TokenKind::Star) ? TypeNodeKind::Pointer : TypeNodeKind::Reference;
         advance();
-    } else if (check(TokenKind::KwConst)) {
-        kind = BindingKind::Immutable;
-        advance();
-    } else if (check(TokenKind::KwVar)) {
-        kind = BindingKind::Mutable;
-        advance();
+        auto* view = m_arena.create<TypeNode>(kind);
+        view->m_is_const = is_const;
+        view->m_inner = parse_type(allow_generic_args);
+        view->m_span = span_from(start);
+        return view->m_inner ? view : nullptr;
     }
 
-    Token name = consume(TokenKind::Identifier, "Expected variable name");
-    SymbolID type_name = INVALID_SYMBOL_ID;
-    if (check(TokenKind::Colon)) {
-        advance();
-        type_name = consume(TokenKind::Identifier, "Expected variable type").m_symbol_id;
-    }
-
-    ExprNode* init = nullptr;
-    if (check(TokenKind::Equal)) {
-        advance();
-        init = parse_expression(0);
-    }
-
-    consume(TokenKind::Semicolon, "Expected ';'");
-    return m_arena.create<VarDeclNode>(name.m_symbol_id, type_name, init, kind);
-}
-
-StmtNode* Parser::parse_statement() {
-    size_t prev_cursor = m_cursor;
-
-    // Compile-time conditional branch inside function:
-    // @if (cond) { ... } @elif (cond) { ... } @else { ... } OR single-statement @if (cond) stmt;
-    if (check(TokenKind::At) && (peek().m_kind == TokenKind::KwIf || peek().m_raw_lexeme == "if")) {
-        std::vector<ConditionalBranch> branches;
-
-        while (check(TokenKind::At) && !is_at_end()) {
-            std::string_view dir_name = peek().m_raw_lexeme;
-            if (peek().m_kind == TokenKind::KwIf) dir_name = "if";
-            else if (peek().m_kind == TokenKind::KwElse) dir_name = "else";
-
-            if (dir_name != "if" && dir_name != "elif" && dir_name != "else") {
-                break;
-            }
-
-            advance(); // consume '@'
-            advance(); // consume 'if' / 'elif' / 'else'
-
-            std::string condition;
-            if (dir_name == "if" || dir_name == "elif") {
-                consume(TokenKind::OpenParen, "Expected '(' after @if / @elif");
-                int paren_depth = 1;
-                while (paren_depth > 0 && !is_at_end()) {
-                    if (check(TokenKind::OpenParen)) paren_depth++;
-                    else if (check(TokenKind::CloseParen)) {
-                        paren_depth--;
-                        if (paren_depth == 0) break;
-                    }
-                    if (!condition.empty() && current().m_kind != TokenKind::Dot && current().m_kind != TokenKind::OpenParen) {
-                        condition += " ";
-                    }
-                    condition += current().m_raw_lexeme;
-                    advance();
-                }
-                consume(TokenKind::CloseParen, "Expected ')' after condition");
-            }
-
-            std::vector<StmtNode*> body;
-            if (check(TokenKind::OpenBrace)) {
-                advance(); // consume '{'
-                while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-                    size_t prev_cur = m_cursor;
-                    body.push_back(parse_statement());
-                    if (m_cursor == prev_cur && !is_at_end()) advance();
-                }
-                consume(TokenKind::CloseBrace, "Expected '}'");
-            } else {
-                body.push_back(parse_statement());
-            }
-
-            branches.emplace_back(std::move(condition), std::move(body));
-
-            if (dir_name == "else") {
-                break;
-            }
-        }
-        return m_arena.create<ConditionalStmt>(std::move(branches));
-    }
-
-    if (check(TokenKind::KwReturn)) {
-        advance();
-        auto* ret = m_arena.create<ReturnStmt>();
-        if (!check(TokenKind::Semicolon)) {
-            ret->m_value = parse_expression(0);
-        }
-        consume(TokenKind::Semicolon, "Expected ';'");
-        return ret;
-    }
-
-    if (check(TokenKind::KwVar) || check(TokenKind::KwConst) || check(TokenKind::KwConstx)) {
-        return m_arena.create<DeclStmt>(parse_var_decl());
-    }
-
-    // Check for inline assignment / declaration: name = expr;
-    if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
-        return m_arena.create<DeclStmt>(parse_var_decl());
-    }
-
-    ExprNode* expr = parse_expression(0);
-    consume(TokenKind::Semicolon, "Expected ';'");
-
-    // Panic recovery: if no tokens were consumed in this statement, advance to guarantee loop progress
-    if (m_cursor == prev_cursor && !is_at_end()) {
-        std::cerr << "Syntax Error at line " << current().m_span.m_start.m_line
-                  << ":" << current().m_span.m_start.m_column << " - Unexpected token '"
-                  << current().m_raw_lexeme << "'\n";
-        advance();
+    if (!check(TokenKind::Identifier)) {
+        error_here("Expected type, found '" + std::string(current().m_raw_lexeme.empty()
+                   ? token_kind_to_str(current().m_kind) : current().m_raw_lexeme) + "'");
         return nullptr;
     }
 
-    return m_arena.create<ExprStmt>(expr);
+    auto* path = m_arena.create<TypeNode>(TypeNodeKind::Path);
+    path->m_path.push_back(advance().m_symbol_id);
+    while (check(TokenKind::DoubleColon) && peek().m_kind == TokenKind::Identifier) {
+        advance();
+        path->m_path.push_back(advance().m_symbol_id);
+    }
+    if (allow_generic_args && check(TokenKind::Less)) {
+        path->m_generic_args = parse_generic_args();
+    }
+    path->m_span = span_from(start);
+    return path;
 }
 
-DeclNode* Parser::parse_declaration() {
-    std::vector<AttributeNode> attributes;
-    while (check(TokenKind::At)) {
-        attributes.push_back(parse_attribute());
-    }
+/// Expression inside '<...>'. A bare '>' terminates it instead of acting as the greater-than operator.
+ExprNode* Parser::parse_angle_expression() {
+    bool saved_angle = m_in_angle_list;
+    bool saved_no_struct = m_no_struct_literal;
+    m_in_angle_list = true;
+    m_no_struct_literal = true;
+    ExprNode* value = parse_expression();
+    m_in_angle_list = saved_angle;
+    m_no_struct_literal = saved_no_struct;
+    return value;
+}
 
-    // Check for multi-declaration compile-time block: @if (cond) { decl1; decl2; }
-    if (check(TokenKind::OpenBrace) && !attributes.empty()) {
-        auto& interner = StringInterner::get();
-        if (attributes.back().m_name == interner.intern("if")) {
-            advance(); // consume '{'
-            std::vector<DeclNode*> block_decls;
-            while (!check(TokenKind::CloseBrace) && !is_at_end()) {
-                size_t prev_cur = m_cursor;
-                DeclNode* d = parse_declaration();
-                if (d) block_decls.push_back(d);
-                if (m_cursor == prev_cur && !is_at_end()) advance();
-            }
-            consume(TokenKind::CloseBrace, "Expected '}'");
-
-            std::string cond_str;
-            if (!attributes.back().m_args.empty()) {
-                cond_str = attributes.back().m_args[0].m_value;
-            }
-            std::vector<ConditionalDeclBranch> branches;
-            branches.emplace_back(std::move(cond_str), std::move(block_decls));
-            auto* block = m_arena.create<ConditionalDeclBlock>(std::move(branches));
-            block->m_attributes = std::move(attributes);
-            return block;
-        }
-    }
-
-    DeclNode* decl = nullptr;
-    if (check(TokenKind::HashImport) || (check(TokenKind::Hash) && peek().m_kind == TokenKind::KwImport) || check(TokenKind::KwImport)) {
-        if (check(TokenKind::HashImport)) {
-            advance();
-        } else if (check(TokenKind::Hash)) {
-            advance(); // consume '#'
-            advance(); // consume 'import'
+std::vector<GenericArg> Parser::parse_generic_args() {
+    std::vector<GenericArg> args;
+    consume(TokenKind::Less, "Expected '<'");
+    while (!check(TokenKind::Greater) && !is_at_end()) {
+        GenericArg arg;
+        if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
+            arg.m_name = advance().m_symbol_id;
+            advance(); // '='
+            arg.m_value = parse_angle_expression();
+            if (arg.m_value == nullptr) break;
         } else {
-            advance(); // consume 'import'
+            arg.m_type = parse_type();
+            if (arg.m_type == nullptr) break;
         }
-        std::string mod_path;
-        while (!check(TokenKind::Semicolon) && !check(TokenKind::Less) && !is_at_end()) {
-            mod_path += current().m_raw_lexeme;
-            advance();
-        }
-        SymbolID sym = StringInterner::get().intern(mod_path);
-        auto* imp = m_arena.create<ImportDeclNode>(sym);
-
-        // Parse compile-time import template arguments: <A = ..., B = ...>
-        if (check(TokenKind::Less)) {
-            advance(); // consume '<'
-            while (!check(TokenKind::Greater) && !is_at_end()) {
-                size_t prev_cur = m_cursor;
-                SymbolID arg_name = INVALID_SYMBOL_ID;
-                if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Equal) {
-                    arg_name = advance().m_symbol_id;
-                    consume(TokenKind::Equal, "Expected '=' in import template argument");
-                }
-                ExprNode* val = parse_expression(0);
-                imp->m_template_args.push_back(ImportArg(arg_name, val));
-
-                if (check(TokenKind::Comma)) advance();
-                if (m_cursor == prev_cur && !is_at_end()) advance();
-            }
-            consume(TokenKind::Greater, "Expected '>' after import template arguments");
-        }
-
-        consume(TokenKind::Semicolon, "Expected ';' after import path");
-        decl = imp;
-    } else if (check(TokenKind::KwAsync)) {
-        advance();
-        decl = parse_function(true);
-    } else if (check(TokenKind::KwFn)) {
-        decl = parse_function(false);
-    } else if (check(TokenKind::KwRuleset)) {
-        decl = parse_ruleset();
-    } else if (check(TokenKind::KwClass)) {
-        decl = parse_class();
-    } else if (check(TokenKind::KwBlueprint)) {
-        decl = parse_blueprint();
-    } else if (check(TokenKind::KwEnum)) {
-        decl = parse_enum();
-    } else if (check(TokenKind::KwConstx) || check(TokenKind::KwConst) || check(TokenKind::KwVar)) {
-        decl = parse_var_decl();
-    } else if (check(TokenKind::KwModule)) {
-        advance(); // consume 'module'
-        std::string mod_name;
-        while (!check(TokenKind::Semicolon) && !check(TokenKind::Less) && !is_at_end()) {
-            mod_name += current().m_raw_lexeme;
-            advance();
-        }
-        auto& interner = StringInterner::get();
-        if (m_current_module) {
-            m_current_module->m_module_name = interner.intern(mod_name);
-        }
-
-        // Module template parameters: module name<A = 1, B = 0>;
-        if (check(TokenKind::Less)) {
-            advance(); // consume '<'
-            while (!check(TokenKind::Greater) && !is_at_end()) {
-                size_t prev_cur = m_cursor;
-                if (check(TokenKind::Identifier)) {
-                    SymbolID p_name = advance().m_symbol_id;
-                    ExprNode* def_val = nullptr;
-                    if (check(TokenKind::Equal)) {
-                        advance();
-                        def_val = parse_expression(0);
-                    }
-                    if (m_current_module) {
-                        m_current_module->m_parameters.push_back(ModuleParam(p_name, def_val));
-                    }
-                }
-                if (check(TokenKind::Comma)) advance();
-                if (m_cursor == prev_cur && !is_at_end()) advance();
-            }
-            consume(TokenKind::Greater, "Expected '>' after module template parameters");
-        }
-        consume(TokenKind::Semicolon, "Expected ';'");
-        return nullptr;
-    } else {
-        advance();
-        return nullptr;
+        args.push_back(arg);
+        if (!match(TokenKind::Comma)) break;
     }
-
-    if (decl) decl->m_attributes = std::move(attributes);
-    return decl;
+    consume(TokenKind::Greater, "Expected '>' to close generic argument list");
+    return args;
 }
 
-ModuleAST* Parser::parse_module() {
-    auto* mod = m_arena.create<ModuleAST>();
-    m_current_module = mod;
-    while (!is_at_end()) {
-        size_t prev_cursor = m_cursor;
-        DeclNode* decl = parse_declaration();
-        if (decl) mod->m_declarations.push_back(decl);
-        if (m_cursor == prev_cursor && !is_at_end()) {
-            advance();
+std::vector<GenericParam> Parser::parse_generic_params() {
+    std::vector<GenericParam> params;
+    consume(TokenKind::Less, "Expected '<'");
+    while (!check(TokenKind::Greater) && !is_at_end()) {
+        GenericParam param;
+        Token name = consume(TokenKind::Identifier, "Expected generic parameter name");
+        if (name.m_kind == TokenKind::Invalid) break;
+        param.m_name = name.m_symbol_id;
+        if (match(TokenKind::Colon)) {
+            param.m_constraint = parse_type();
+            if (param.m_constraint == nullptr) break;
         }
+        if (match(TokenKind::Equal)) {
+            param.m_default = parse_angle_expression();
+            if (param.m_default == nullptr) break;
+        }
+        params.push_back(param);
+        if (!match(TokenKind::Comma)) break;
     }
-    return mod;
+    consume(TokenKind::Greater, "Expected '>' to close generic parameter list");
+    return params;
 }
 
 } // namespace fool

@@ -1,0 +1,11 @@
+module tests::unknown_field;
+
+class Point {
+    x: i32;
+    y: i32;
+}
+
+fn run(p: const& Point) -> i32 {
+    // expect-error: no field
+    return p.z;
+}

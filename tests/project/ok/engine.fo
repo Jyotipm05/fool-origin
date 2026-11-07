@@ -1,0 +1,6 @@
+module tests::engine<FAST = 0, LEVEL = 1>;
+
+@if (FAST == 1)
+fn fast_path() -> i32;
+
+fn level() -> i32;

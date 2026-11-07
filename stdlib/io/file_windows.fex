@@ -21,6 +21,7 @@ fn CloseHandle(h: *void) -> i32;
 fn GetStdHandle(nStdHandle: u32) -> *void;
 
 module std::io::sys_file;
+#import std::io::win32_ffi;
 
 @target(os = "windows")
 fn stdout_write(buf: const*u8, len: usize) {

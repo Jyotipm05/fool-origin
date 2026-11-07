@@ -1,0 +1,3 @@
+module tests::main;
+
+#import tests::lib<NOPE = 1>;

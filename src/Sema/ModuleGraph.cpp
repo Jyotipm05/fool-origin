@@ -1,155 +1,259 @@
 //
 // Created by jmbab on 06-11-2026.
 //
+
 /**
  * @file ModuleGraph.cpp
- * @brief Implementation unit of Pass 1 Module Graph resolution and topological sorting.
+ * @brief Pass 1: module indexing by declared name, import resolution, template argument
+ *        validation and topological ordering.
  */
 
 module;
 
-#include <iostream>
+#include <algorithm>
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <map>
+#include <set>
+#include <sstream>
 #include <string>
 #include <string_view>
-#include <filesystem>
+#include <utility>
 #include <vector>
-#include <unordered_map>
-#include <unordered_set>
-#include <algorithm>
 
 module fool.sema;
 
+import fool.lexer;
+import fool.parser;
+
 namespace fool {
 
-ModuleGraphPass1::ModuleGraphPass1() {
-    // Default search paths: stdlib and current workspace
-    m_search_paths.emplace_back("stdlib");
-    m_search_paths.emplace_back(".");
+namespace {
+
+std::string_view text_of(SymbolID id) { return StringInterner::get().resolve(id); }
+
+bool role_for_extension(const std::filesystem::path& path, FileRole& role) {
+    std::string ext = path.extension().string();
+    if (ext == ".fo") { role = FileRole::Interface; return true; }
+    if (ext == ".fl") { role = FileRole::Implementation; return true; }
+    if (ext == ".fex") { role = FileRole::ExternalOverlay; return true; }
+    return false;
 }
+
+/// Imports may sit inside top-level `@if` blocks; the graph conservatively follows all branches.
+void collect_imports(const std::vector<DeclNode*>& decls, std::vector<ImportDeclNode*>& out) {
+    for (DeclNode* decl : decls) {
+        if (auto* imp = dynamic_cast<ImportDeclNode*>(decl)) {
+            out.push_back(imp);
+        } else if (auto* block = dynamic_cast<ConditionalDeclBlock*>(decl)) {
+            for (const ConditionalDeclBranch& branch : block->m_branches) collect_imports(branch.m_declarations, out);
+        }
+    }
+}
+
+} // namespace
+
+ModuleGraphPass1::ModuleGraphPass1(Arena& arena, DiagnosticEngine& diag, TargetConfig target)
+    : m_arena(arena), m_diag(diag), m_target(std::move(target)) {}
 
 void ModuleGraphPass1::add_search_path(const std::filesystem::path& path) {
     m_search_paths.push_back(path);
 }
 
-bool ModuleGraphPass1::resolve_module(SymbolID module_name, const TargetConfig& target) {
-    auto& interner = StringInterner::get();
-    std::string_view mod_path_str = interner.resolve(module_name);
-
-    // Convert module path e.g. "std::core" or "std::sync::mutex" to relative filesystem path
-    // std::sync::mutex -> sync/mutex (if under stdlib) or std/sync/mutex
-    std::string rel_path;
-    size_t start = 0;
-    while (start < mod_path_str.size()) {
-        size_t next_colon = mod_path_str.find("::", start);
-        std::string_view part = (next_colon == std::string_view::npos) 
-            ? mod_path_str.substr(start) 
-            : mod_path_str.substr(start, next_colon - start);
-
-        if (!rel_path.empty()) rel_path += "/";
-        rel_path += part;
-
-        if (next_colon == std::string_view::npos) break;
-        start = next_colon + 2;
-    }
-
-    ModuleNode node;
-    node.m_name = module_name;
-
-    // Search for .fo, .fl, and .fex across search roots
-    bool found_interface = false;
-    for (const auto& search_root : m_search_paths) {
-        // Try direct path: <search_root>/<rel_path>.fo
-        std::filesystem::path candidate_fo = search_root / (rel_path + ".fo");
-        std::filesystem::path candidate_fl = search_root / (rel_path + ".fl");
-
-        // Also check if prefix is stripped: e.g. std::core in stdlib/core/
-        std::string stripped_rel = rel_path;
-        if (stripped_rel.starts_with("std/")) {
-            stripped_rel = stripped_rel.substr(4);
-        }
-        std::filesystem::path alt_fo = search_root / (stripped_rel + ".fo");
-        std::filesystem::path alt_fl = search_root / (stripped_rel + ".fl");
-
-        if (std::filesystem::exists(candidate_fo)) {
-            node.m_interface_path = candidate_fo;
-            if (std::filesystem::exists(candidate_fl)) {
-                node.m_implementation_path = candidate_fl;
+void ModuleGraphPass1::index_search_paths() {
+    std::vector<std::filesystem::path> files;
+    for (const auto& root : m_search_paths) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(root, ec)) continue;
+        for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+            FileRole role;
+            if (entry.is_regular_file() && role_for_extension(entry.path(), role) && m_target.file_applies(entry.path())) {
+                files.push_back(entry.path());
             }
-            found_interface = true;
-            break;
-        } else if (std::filesystem::exists(alt_fo)) {
-            node.m_interface_path = alt_fo;
-            if (std::filesystem::exists(alt_fl)) {
-                node.m_implementation_path = alt_fl;
+        }
+    }
+    std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    for (const auto& file : files) add_source_file(file);
+}
+
+void ModuleGraphPass1::add_source_file(const std::filesystem::path& path) {
+    FileRole role;
+    if (!role_for_extension(path, role)) {
+        m_diag.set_current_file(path.string());
+        m_diag.error(SourceSpan{}, "unsupported file extension (expected .fo, .fl or .fex)");
+        return;
+    }
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        m_diag.set_current_file(path.string());
+        m_diag.error(SourceSpan{}, "cannot open file");
+        return;
+    }
+    std::stringstream buffer;
+    buffer << in.rdbuf();
+    std::string source = buffer.str();
+
+    m_diag.set_current_file(path.string());
+    Lexer lexer(source, path.string(), m_diag);
+    Parser parser(lexer.tokenize_all(), m_arena, m_diag);
+    ModuleAST* ast = parser.parse_module();
+    ++m_indexed_files;
+    assign_source_file(ast, path.string());
+
+    if (ast->m_module_sections.empty()) {
+        m_diag.error(SourceSpan{}, "file does not declare a module (expected 'module name;')");
+        return;
+    }
+
+    std::set<SymbolID> seen;
+    for (SymbolID section : ast->m_module_sections) {
+        if (!seen.insert(section).second) continue;
+        ModuleNode& node = m_modules[std::string(text_of(section))];
+        node.m_name = section;
+        node.m_files.push_back(ModuleFile{path, role, ast});
+
+        if (section != ast->m_module_name || ast->m_parameters.empty()) continue;
+        if (node.m_parameters.empty()) {
+            node.m_parameters = ast->m_parameters;
+            continue;
+        }
+        bool same = node.m_parameters.size() == ast->m_parameters.size();
+        for (size_t i = 0; same && i < node.m_parameters.size(); ++i) {
+            same = node.m_parameters[i].m_name == ast->m_parameters[i].m_name;
+        }
+        if (!same) {
+            m_diag.error(ast->m_span, "module '" + std::string(text_of(section)) +
+                                      "' declares a different template parameter list than its other files");
+        }
+    }
+}
+
+bool ModuleGraphPass1::resolve_imports() {
+    size_t errors_before = m_diag.error_count();
+    TargetConfig target = m_target;
+
+    for (auto& [module_name, node] : m_modules) {
+        std::set<std::string> dependencies;
+        for (const ModuleFile& file : node.m_files) {
+            std::vector<ImportDeclNode*> imports;
+            collect_imports(file.m_ast->m_declarations, imports);
+            m_diag.set_current_file(file.m_path.string());
+
+            for (ImportDeclNode* imp : imports) {
+                if (imp->m_module != node.m_name) continue;
+                std::string target_name(text_of(imp->m_module_path));
+                auto found = m_modules.find(target_name);
+                if (found == m_modules.end()) {
+                    m_diag.error(imp->m_span, "unresolved import '" + target_name + "': no file declares that module");
+                    continue;
+                }
+                if (target_name == module_name) {
+                    m_diag.error(imp->m_span, "module '" + module_name + "' imports itself");
+                    continue;
+                }
+                dependencies.insert(target_name);
+
+                // Template arguments: names must exist on the target module, values must be constants.
+                ModuleNode& dep = found->second;
+                ConstTable overrides;
+                ConstTable empty;
+                ConstEvaluator evaluator(empty, m_diag);
+                std::set<SymbolID> given;
+                for (const ImportArg& arg : imp->m_template_args) {
+                    bool known = std::any_of(dep.m_parameters.begin(), dep.m_parameters.end(),
+                                             [&](const ModuleParam& p) { return p.m_name == arg.m_name; });
+                    if (!known) {
+                        m_diag.error(arg.m_span, "module '" + target_name + "' has no template parameter '" +
+                                                 std::string(text_of(arg.m_name)) + "'");
+                        continue;
+                    }
+                    if (!given.insert(arg.m_name).second) {
+                        m_diag.error(arg.m_span, "template argument '" + std::string(text_of(arg.m_name)) +
+                                                 "' is specified more than once");
+                        continue;
+                    }
+                    if (auto value = evaluator.evaluate(arg.m_value)) overrides[arg.m_name] = *value;
+                }
+
+                if (overrides.empty()) continue;
+                std::vector<std::pair<std::string, std::string>> rendered;
+                for (const auto& [name, value] : overrides) {
+                    rendered.emplace_back(std::string(text_of(name)), value.to_string());
+                }
+                std::sort(rendered.begin(), rendered.end());
+                std::string key = target_name + "<";
+                for (size_t i = 0; i < rendered.size(); ++i) {
+                    if (i != 0) key += ",";
+                    key += rendered[i].first + "=" + rendered[i].second;
+                }
+                key += ">@" + target.to_string();
+                bool exists = std::any_of(dep.m_instantiations.begin(), dep.m_instantiations.end(),
+                                          [&](const ModuleInstantiation& inst) { return inst.m_key == key; });
+                if (!exists) dep.m_instantiations.push_back(ModuleInstantiation{key, std::move(overrides)});
             }
-            found_interface = true;
-            break;
+        }
+
+        node.m_dependencies.clear();
+        for (const std::string& dependency : dependencies) {
+            node.m_dependencies.push_back(StringInterner::get().intern(dependency));
         }
     }
-
-    if (!found_interface) {
-        return false;
-    }
-
-    // Check for platform overlays: <rel_path>_<os>.fex
-    for (const auto& search_root : m_search_paths) {
-        std::string overlay_candidate = rel_path + "_" + target.m_os + ".fex";
-        std::filesystem::path p = search_root / overlay_candidate;
-        if (std::filesystem::exists(p)) {
-            node.m_overlay_paths.push_back(p);
-        }
-    }
-
-    m_modules[module_name] = std::move(node);
-    return true;
+    return m_diag.error_count() == errors_before;
 }
 
 bool ModuleGraphPass1::sort_topological() {
+    enum class Mark { Unvisited, InProgress, Done };
+    std::map<std::string, Mark> marks;
+    for (const auto& entry : m_modules) marks[entry.first] = Mark::Unvisited;
+    std::vector<std::string> stack;
+    bool ok = true;
     m_topological_order.clear();
-    std::unordered_set<SymbolID> visited;
-    std::unordered_set<SymbolID> visiting;
+    m_diag.set_current_file("");
 
-    auto dfs = [&](auto& self, SymbolID mod_id) -> bool {
-        if (visiting.contains(mod_id)) {
-            // Circular dependency detected
-            return false;
-        }
-        if (visited.contains(mod_id)) {
-            return true;
-        }
+    // Recursive lambda via std::function-free explicit helper struct.
+    struct Visitor {
+        ModuleGraphPass1& m_graph;
+        std::map<std::string, Mark>& m_marks;
+        std::vector<std::string>& m_stack;
+        bool& m_ok;
 
-        visiting.insert(mod_id);
-
-        auto it = m_modules.find(mod_id);
-        if (it != m_modules.end()) {
-            for (SymbolID dep_id : it->second.m_dependencies) {
-                if (!self(self, dep_id)) return false;
+        void visit(const std::string& name) {
+            m_marks[name] = Mark::InProgress;
+            m_stack.push_back(name);
+            const ModuleNode& node = m_graph.m_modules.at(name);
+            for (SymbolID dep_id : node.m_dependencies) {
+                std::string dep(StringInterner::get().resolve(dep_id));
+                if (m_graph.m_modules.find(dep) == m_graph.m_modules.end()) continue;
+                if (m_marks[dep] == Mark::Unvisited) {
+                    visit(dep);
+                } else if (m_marks[dep] == Mark::InProgress) {
+                    std::string cycle;
+                    auto start = std::find(m_stack.begin(), m_stack.end(), dep);
+                    for (auto it = start; it != m_stack.end(); ++it) cycle += *it + " -> ";
+                    cycle += dep;
+                    m_graph.m_diag.error(SourceSpan{}, "circular module dependency: " + cycle);
+                    m_ok = false;
+                }
             }
+            m_stack.pop_back();
+            m_marks[name] = Mark::Done;
+            m_graph.m_topological_order.push_back(node.m_name);
         }
-
-        visiting.erase(mod_id);
-        visited.insert(mod_id);
-        m_topological_order.push_back(mod_id);
-        return true;
     };
 
-    for (const auto& [id, _] : m_modules) {
-        if (!visited.contains(id)) {
-            if (!dfs(dfs, id)) return false;
-        }
+    Visitor visitor{*this, marks, stack, ok};
+    for (const auto& entry : m_modules) {
+        if (marks[entry.first] == Mark::Unvisited) visitor.visit(entry.first);
     }
-
-    return true;
-}
-
-const std::vector<SymbolID>& ModuleGraphPass1::get_compilation_order() const {
-    return m_topological_order;
+    return ok;
 }
 
 const ModuleNode* ModuleGraphPass1::get_module(SymbolID name) const {
-    auto it = m_modules.find(name);
-    return (it != m_modules.end()) ? &it->second : nullptr;
+    auto it = m_modules.find(std::string(text_of(name)));
+    return it == m_modules.end() ? nullptr : &it->second;
 }
 
 } // namespace fool
-

@@ -14,6 +14,7 @@ module;
 #include <string_view>
 #include <cstdint>
 #include <optional>
+#include <utility>
 
 export module fool.ast;
 
@@ -46,11 +47,12 @@ enum class BindingKind {
 /**
  * @struct AttributeArg
  * @brief Key-value pair in an @target, @inline, or @extern directive.
+ *        Positional arguments (e.g. the "C" in @extern("C", ...)) carry an invalid key.
  */
 struct AttributeArg {
     // 1. Member variables
     SymbolID m_key{INVALID_SYMBOL_ID};
-    std::string_view m_value;
+    std::string_view m_value; ///< Unquoted value text (string quotes are stripped)
 
     // 2. Constructors
     AttributeArg() = default;
@@ -78,6 +80,8 @@ public:
 /**
  * @class ASTNode
  * @brief Base AST node containing source location coordinates.
+ * @details Nodes are arena allocated; Arena::create registers destructors of nodes that own
+ *          heap memory (std::vector members), so they are released with the arena.
  */
 class ASTNode {
 public:
@@ -88,6 +92,72 @@ public:
     ASTNode() = default;
     virtual ~ASTNode() = default;
 };
+
+// ---------------------------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------------------------
+
+class TypeNode;
+class ExprNode;
+
+/**
+ * @struct GenericArg
+ * @brief One argument inside '<...>': a type (Atomic<u32>) or a named constant (Math<SIMD = true>).
+ */
+struct GenericArg {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID}; ///< Set for 'NAME = value' arguments
+    TypeNode* m_type{nullptr};          ///< Set for type arguments
+    ExprNode* m_value{nullptr};         ///< Set for 'NAME = value' arguments
+};
+
+/**
+ * @struct GenericParam
+ * @brief One parameter inside a declaration's '<...>': 'T', 'T: Bound' or 'SIMD: bool = false'.
+ */
+struct GenericParam {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    TypeNode* m_constraint{nullptr};    ///< Ruleset bound or constant type
+    ExprNode* m_default{nullptr};
+};
+
+enum class TypeNodeKind : uint8_t {
+    Path,      ///< u32, std::core::Span<T>
+    Pointer,   ///< *T / const* T
+    Reference, ///< &T / const& T
+    Never      ///< !
+};
+
+/**
+ * @class TypeNode
+ * @brief Parsed type expression.
+ */
+class TypeNode : public ASTNode {
+public:
+    // 1. Member variables
+    TypeNodeKind m_kind{TypeNodeKind::Path};
+    bool m_is_const{false};              ///< 'const*' / 'const&'
+    std::vector<SymbolID> m_path;        ///< Path segments (Path only)
+    std::vector<GenericArg> m_generic_args;
+    TypeNode* m_inner{nullptr};          ///< Pointee / referent (Pointer, Reference)
+
+    // 2. Constructors
+    TypeNode() = default;
+    explicit TypeNode(TypeNodeKind kind) : m_kind(kind) {}
+
+    // 3. Member functions
+    [[nodiscard]] bool is_const_view() const {
+        return (m_kind == TypeNodeKind::Pointer || m_kind == TypeNodeKind::Reference) && m_is_const;
+    }
+    [[nodiscard]] bool is_view() const {
+        return m_kind == TypeNodeKind::Pointer || m_kind == TypeNodeKind::Reference;
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// Expressions
+// ---------------------------------------------------------------------------------------------
 
 class ExprNode : public ASTNode {};
 
@@ -112,7 +182,7 @@ public:
 class StringLiteralExpr : public ExprNode {
 public:
     // 1. Member variables
-    std::string_view m_value;
+    std::string_view m_value; ///< Interned text including the surrounding quotes
 
     // 2. Constructors
     explicit StringLiteralExpr(std::string_view val) : m_value(val) {}
@@ -136,16 +206,70 @@ public:
     explicit IdentifierExpr(SymbolID id) : m_identifier(id) {}
 };
 
+/**
+ * @class PathExpr
+ * @brief Qualified expression path: ffi::wait, MemoryOrder::SeqCst, Atomic<u32>::new.
+ */
+class PathExpr : public ExprNode {
+public:
+    // 1. Member variables
+    std::vector<SymbolID> m_segments;
+    std::vector<GenericArg> m_generic_args; ///< Generic arguments written on the first segment
+
+    // 2. Constructors
+    PathExpr() = default;
+};
+
+class UnaryExpr : public ExprNode {
+public:
+    // 1. Member variables
+    TokenKind m_op{TokenKind::Invalid}; ///< Bang, Minus, Ampersand (address-of), Star (dereference)
+    ExprNode* m_operand{nullptr};
+
+    // 2. Constructors
+    UnaryExpr(TokenKind op, ExprNode* operand) : m_op(op), m_operand(operand) {}
+};
+
 class BinaryExpr : public ExprNode {
 public:
     // 1. Member variables
-    TokenKind m_op{TokenKind::Invalid};
+    TokenKind m_op{TokenKind::Invalid}; ///< Equal means assignment
     ExprNode* m_lhs{nullptr};
     ExprNode* m_rhs{nullptr};
 
     // 2. Constructors
     BinaryExpr(TokenKind op, ExprNode* l, ExprNode* r)
         : m_op(op), m_lhs(l), m_rhs(r) {}
+};
+
+class CastExpr : public ExprNode {
+public:
+    // 1. Member variables
+    ExprNode* m_operand{nullptr};
+    TypeNode* m_target{nullptr};
+
+    // 2. Constructors
+    CastExpr(ExprNode* operand, TypeNode* target) : m_operand(operand), m_target(target) {}
+};
+
+class MemberExpr : public ExprNode {
+public:
+    // 1. Member variables
+    ExprNode* m_object{nullptr};
+    SymbolID m_member{INVALID_SYMBOL_ID};
+
+    // 2. Constructors
+    MemberExpr(ExprNode* object, SymbolID member) : m_object(object), m_member(member) {}
+};
+
+class IndexExpr : public ExprNode {
+public:
+    // 1. Member variables
+    ExprNode* m_base{nullptr};
+    ExprNode* m_index{nullptr};
+
+    // 2. Constructors
+    IndexExpr(ExprNode* base, ExprNode* index) : m_base(base), m_index(index) {}
 };
 
 /**
@@ -156,6 +280,7 @@ struct CallArg {
     // 1. Member variables
     SymbolID m_label{INVALID_SYMBOL_ID}; ///< e.g. "width:" in draw_box(width: 100)
     ExprNode* m_expr{nullptr};
+    SourceSpan m_span;
 
     // 2. Constructors
     CallArg() = default;
@@ -171,6 +296,41 @@ public:
     // 2. Constructors
     CallExpr() = default;
 };
+
+/**
+ * @class IntrinsicCallExpr
+ * @brief Compile-time intrinsic invocation such as @size_of(T).
+ */
+class IntrinsicCallExpr : public ExprNode {
+public:
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    std::vector<ExprNode*> m_args;
+
+    // 2. Constructors
+    IntrinsicCallExpr() = default;
+};
+
+struct FieldInit {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    ExprNode* m_value{nullptr};
+    SourceSpan m_span;
+};
+
+class StructLiteralExpr : public ExprNode {
+public:
+    // 1. Member variables
+    TypeNode* m_type{nullptr};
+    std::vector<FieldInit> m_fields;
+
+    // 2. Constructors
+    StructLiteralExpr() = default;
+};
+
+// ---------------------------------------------------------------------------------------------
+// Statements
+// ---------------------------------------------------------------------------------------------
 
 class DeclNode;
 
@@ -206,25 +366,69 @@ public:
     explicit DeclStmt(DeclNode* decl) : m_decl(decl) {}
 };
 
+class BlockStmt : public StmtNode {
+public:
+    // 1. Member variables
+    std::vector<StmtNode*> m_statements;
+
+    // 2. Constructors
+    BlockStmt() = default;
+};
+
+class IfStmt : public StmtNode {
+public:
+    // 1. Member variables
+    ExprNode* m_condition{nullptr};
+    BlockStmt* m_then{nullptr};
+    StmtNode* m_else{nullptr}; ///< nullptr, a BlockStmt, or a chained IfStmt
+
+    // 2. Constructors
+    IfStmt() = default;
+};
+
+class WhileStmt : public StmtNode {
+public:
+    // 1. Member variables
+    ExprNode* m_condition{nullptr};
+    BlockStmt* m_body{nullptr};
+
+    // 2. Constructors
+    WhileStmt() = default;
+};
+
+class ForStmt : public StmtNode {
+public:
+    // 1. Member variables
+    SymbolID m_variable{INVALID_SYMBOL_ID};
+    ExprNode* m_iterable{nullptr};
+    BlockStmt* m_body{nullptr};
+
+    // 2. Constructors
+    ForStmt() = default;
+};
+
+class BreakStmt : public StmtNode {};
+class ContinueStmt : public StmtNode {};
+
 /**
  * @struct ConditionalBranch
  * @brief Represents a branch in a compile-time @if, @elif, or @else directive inside a function.
  */
 struct ConditionalBranch {
     // 1. Member variables
-    std::string m_condition_text;  ///< Condition (e.g. "def(ASIO_IOURING_ON) && (ASIO_IOURING_ON == 1)"), empty for @else
-    std::vector<StmtNode*> m_body; ///< Statements inside this branch
+    ExprNode* m_condition{nullptr};  ///< nullptr for @else
+    std::vector<StmtNode*> m_body;   ///< Statements inside this branch
 
     // 2. Constructors
     ConditionalBranch() = default;
-    ConditionalBranch(std::string cond, std::vector<StmtNode*> body)
-        : m_condition_text(std::move(cond)), m_body(std::move(body)) {}
+    ConditionalBranch(ExprNode* cond, std::vector<StmtNode*> body)
+        : m_condition(cond), m_body(std::move(body)) {}
 };
 
 /**
  * @class ConditionalStmt
  * @brief Compile-time conditional branch inside function bodies (@if (...) { ... } @elif (...) { ... } @else { ... }).
- * Zero runtime overhead; inactive branches are pruned before codegen.
+ * Zero runtime overhead; inactive branches are pruned before type checking.
  */
 class ConditionalStmt : public StmtNode {
 public:
@@ -233,9 +437,11 @@ public:
 
     // 2. Constructors
     ConditionalStmt() = default;
-    explicit ConditionalStmt(std::vector<ConditionalBranch> branches)
-        : m_branches(std::move(branches)) {}
 };
+
+// ---------------------------------------------------------------------------------------------
+// Declarations
+// ---------------------------------------------------------------------------------------------
 
 /**
  * @class DeclNode
@@ -245,7 +451,9 @@ class DeclNode : public ASTNode {
 public:
     // 1. Member variables
     std::vector<AttributeNode> m_attributes;
-    bool m_is_active{true}; ///< Cleared during Pass 0 if @target mismatch occurs
+    bool m_is_active{true};                 ///< Cleared during Pass 0 if @target / @if prunes it
+    SymbolID m_module{INVALID_SYMBOL_ID};   ///< 'module' section this declaration appeared in
+    std::string_view m_file;                ///< Interned path of the defining file (set by the driver / module graph)
 
     // 2. Constructors
     DeclNode() = default;
@@ -257,18 +465,18 @@ public:
  */
 struct ConditionalDeclBranch {
     // 1. Member variables
-    std::string m_condition_text;
+    ExprNode* m_condition{nullptr}; ///< nullptr for @else
     std::vector<DeclNode*> m_declarations;
 
     // 2. Constructors
     ConditionalDeclBranch() = default;
-    ConditionalDeclBranch(std::string cond, std::vector<DeclNode*> decls)
-        : m_condition_text(std::move(cond)), m_declarations(std::move(decls)) {}
+    ConditionalDeclBranch(ExprNode* cond, std::vector<DeclNode*> decls)
+        : m_condition(cond), m_declarations(std::move(decls)) {}
 };
 
 /**
  * @class ConditionalDeclBlock
- * @brief Top-level compile-time conditional block containing multiple declarations.
+ * @brief Top-level compile-time conditional (@if cond decl  |  @if cond { decls } @elif ... @else { ... }).
  */
 class ConditionalDeclBlock : public DeclNode {
 public:
@@ -277,8 +485,6 @@ public:
 
     // 2. Constructors
     ConditionalDeclBlock() = default;
-    explicit ConditionalDeclBlock(std::vector<ConditionalDeclBranch> branches)
-        : m_branches(std::move(branches)) {}
 };
 
 /**
@@ -289,6 +495,7 @@ struct ImportArg {
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
     ExprNode* m_value{nullptr};
+    SourceSpan m_span;
 
     // 2. Constructors
     ImportArg() = default;
@@ -320,26 +527,27 @@ class VarDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    SymbolID m_type_name{INVALID_SYMBOL_ID};
+    TypeNode* m_type{nullptr};
     ExprNode* m_initializer{nullptr};
     BindingKind m_kind{BindingKind::Mutable};
 
     // 2. Constructors
     VarDeclNode() = default;
-    VarDeclNode(SymbolID name, SymbolID type_name, ExprNode* init, BindingKind kind)
-        : m_name(name), m_type_name(type_name), m_initializer(init), m_kind(kind) {}
+    VarDeclNode(SymbolID name, TypeNode* type, ExprNode* init, BindingKind kind)
+        : m_name(name), m_type(type), m_initializer(init), m_kind(kind) {}
 };
 
 struct ParameterDecl {
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    SymbolID m_type_name{INVALID_SYMBOL_ID};
+    TypeNode* m_type{nullptr};
     ExprNode* m_default_value{nullptr}; ///< Supports middle and trailing defaults
+    SourceSpan m_span;
 
     // 2. Constructors
     ParameterDecl() = default;
-    ParameterDecl(SymbolID name, SymbolID type_name, ExprNode* default_val = nullptr)
-        : m_name(name), m_type_name(type_name), m_default_value(default_val) {}
+    ParameterDecl(SymbolID name, TypeNode* type, ExprNode* default_val = nullptr)
+        : m_name(name), m_type(type), m_default_value(default_val) {}
 };
 
 struct ReceiverDecl {
@@ -357,10 +565,14 @@ class FunctionDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    bool m_is_async{false}; ///< Lowers to a poll-based state machine
+    SymbolID m_owner{INVALID_SYMBOL_ID};        ///< 'Owner' in `fn Owner::name(...)`
+    std::vector<GenericArg> m_owner_args;       ///< `fn Owner<T>::name` / `fn Owner<SIMD = true>::name`
+    std::vector<GenericParam> m_type_params;    ///< `fn name<T>(...)`
+    bool m_is_async{false};                     ///< Lowers to a poll-based state machine
+    bool m_has_body{false};                     ///< false for interface declarations ending in ';'
     ReceiverDecl m_receiver;
     std::vector<ParameterDecl> m_params;
-    SymbolID m_return_type{INVALID_SYMBOL_ID};
+    TypeNode* m_return_type{nullptr};           ///< nullptr means void
     std::vector<StmtNode*> m_body;
 
     // 2. Constructors
@@ -371,8 +583,7 @@ class RulesetDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    SymbolID m_type_param{INVALID_SYMBOL_ID};
-    SymbolID m_bound{INVALID_SYMBOL_ID}; ///< e.g. T: Equatable
+    std::vector<GenericParam> m_type_params;
     std::vector<FunctionDeclNode*> m_methods;
 
     // 2. Constructors
@@ -383,6 +594,8 @@ class ClassDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
+    bool m_is_struct{false};
+    std::vector<GenericParam> m_type_params;
     std::vector<ParameterDecl> m_fields;
     std::vector<FunctionDeclNode*> m_methods;
 
@@ -394,18 +607,26 @@ class BlueprintDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    std::vector<ParameterDecl> m_type_params;
+    std::vector<GenericParam> m_type_params;
     std::vector<DeclNode*> m_declarations;
 
     // 2. Constructors
     BlueprintDeclNode() = default;
 };
 
+struct EnumVariant {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    std::vector<TypeNode*> m_payload; ///< Ready(T) carries one payload type
+    SourceSpan m_span;
+};
+
 class EnumDeclNode : public DeclNode {
 public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
-    std::vector<SymbolID> m_variants;
+    std::vector<GenericParam> m_type_params;
+    std::vector<EnumVariant> m_variants;
 
     // 2. Constructors
     EnumDeclNode() = default;
@@ -429,8 +650,9 @@ struct ModuleParam {
 class ModuleAST : public ASTNode {
 public:
     // 1. Member variables
-    SymbolID m_module_name{INVALID_SYMBOL_ID};
+    SymbolID m_module_name{INVALID_SYMBOL_ID};   ///< First 'module' line of the file
     std::vector<ModuleParam> m_parameters;
+    std::vector<SymbolID> m_module_sections;     ///< Every module named in the file, in order
     std::vector<DeclNode*> m_declarations;
 
     // 2. Constructors

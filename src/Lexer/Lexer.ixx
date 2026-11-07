@@ -9,13 +9,15 @@
 
 module;
 
+#include <cstddef>
+#include <cstdint>
 #include <string_view>
 #include <vector>
-#include <cstdint>
 
 export module fool.lexer;
 
 import fool.common;
+import fool.diagnostics;
 
 export namespace fool {
 
@@ -55,6 +57,11 @@ enum class TokenKind : uint16_t {
     KwIn,            ///< 'in'
     KwTrue,          ///< 'true'
     KwFalse,         ///< 'false'
+    KwAs,            ///< 'as' explicit cast
+    KwWhile,         ///< 'while'
+    KwStruct,        ///< 'struct' plain data aggregate
+    KwBreak,         ///< 'break'
+    KwContinue,      ///< 'continue'
 
     // Directives & Punctuation
     Hash,            ///< '#' directive prefix
@@ -85,6 +92,12 @@ enum class TokenKind : uint16_t {
     Star,            ///< '*'
     Slash,           ///< '/'
     Ampersand,       ///< '&'
+    AmpAmp,          ///< '&&'
+    Pipe,            ///< '|'
+    PipePipe,        ///< '||'
+    Caret,           ///< '^'
+    Percent,         ///< '%'
+    Bang,            ///< '!' logical not / never type
 };
 
 /**
@@ -124,10 +137,11 @@ class Lexer {
     std::string_view m_filename;
     size_t m_cursor{0};
     SourceLocation m_loc{1, 1, 0};
+    DiagnosticEngine& m_diag;
 
 public:
     // 2. Constructors and Destructors in the MIDDLE
-    explicit Lexer(std::string_view source, std::string_view filename = "<input>");
+    Lexer(std::string_view source, std::string_view filename, DiagnosticEngine& diag);
     ~Lexer() = default;
 
     // 3. Member functions LAST at the bottom
@@ -139,12 +153,14 @@ private:
     char advance();
     bool match(char expected);
     void skip_whitespace_and_comments();
+    void skip_block_comment();
 
     Token make_token(TokenKind kind, SourceLocation start);
     Token make_identifier_or_keyword(SourceLocation start);
     Token make_directive(SourceLocation start);
     Token make_number(SourceLocation start);
     Token make_string(SourceLocation start);
+    Token make_invalid(SourceLocation start, const char* message);
 
     static TokenKind classify_keyword(std::string_view text);
 };

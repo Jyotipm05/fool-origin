@@ -1,0 +1,14 @@
+module tests::struct_literal_fields;
+
+class Point {
+    x: i32;
+    y: i32;
+}
+
+fn run() {
+    // expect-error: missing initializer
+    var a = Point { x: 1 };
+    // expect-error: no field
+    var b = Point { x: 1, y: 2, z: 3 };
+    return;
+}

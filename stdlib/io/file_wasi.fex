@@ -5,6 +5,7 @@ module std::io::wasi_ffi;
 fn wasi_fd_write(fd: i32, iovs: const*void, iovs_len: usize, nwritten:*usize) -> i32;
 
 module std::io::sys_file;
+#import std::io::wasi_ffi;
 
 struct CioVec {
     buf: const* u8;

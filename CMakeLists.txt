@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 4.4)
+cmake_minimum_required(VERSION 3.28)
 
 project(foolc
         VERSION 0.1.0
@@ -6,9 +6,18 @@ project(foolc
         DESCRIPTION "The Fool Systems Programming Language Compiler Frontend"
 )
 
+# C++23 named modules need a generator that understands module dependency scanning (Ninja or
+# Visual Studio) and a recent compiler (clang >= 17 with clang-scan-deps, GCC >= 14, MSVC 19.34+).
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+if (NOT CMAKE_GENERATOR MATCHES "Ninja|Visual Studio")
+    message(WARNING "foolc uses C++ named modules; configure with -G Ninja (see CMakePresets.json).")
+endif()
+
+# Put the compiler where the README says it is.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 # Compiler Binary
 add_executable(foolc
@@ -16,18 +25,22 @@ add_executable(foolc
         src/Common/StringInterner.cpp
         src/Lexer/Lexer.cpp
         src/Parser/Parser.cpp
+        src/Parser/ParserDecl.cpp
+        src/Sema/ConstEval.cpp
         src/Sema/SymbolTable.cpp
         src/Sema/ModuleGraph.cpp
         src/Sema/TypeChecker.cpp
+        src/Sema/TypeCheckerExpr.cpp
 )
 
-# C++20 Module Interfaces directly inside src/
+# C++23 Module Interfaces directly inside src/
 target_sources(foolc
         PUBLIC
         FILE_SET CXX_MODULES
         BASE_DIRS src
         FILES
         src/Common/Common.ixx
+        src/Common/Diagnostics.ixx
         src/Lexer/Lexer.ixx
         src/AST/AST.ixx
         src/Parser/Parser.ixx
@@ -41,67 +54,82 @@ else()
 endif()
 
 # ==============================================================================
-# CTest Integration: Testing foolc compiler on Fool source files
+# CTest Integration
 # ==============================================================================
 include(CTest)
-enable_testing()
 
 if (BUILD_TESTING)
-    # 1. Default test suite runner (tests all examples)
-    add_test(
-        NAME foolc_default_suite
-        COMMAND foolc
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    set_tests_properties(foolc_default_suite PROPERTIES LABELS "smoke;default")
+    # 1. Whole-workspace check: resolves every import, orders the module graph and runs the
+    #    type checker over stdlib/ and examples/ (including import-template instantiations).
+    add_test(NAME foolc_project_check
+             COMMAND foolc --project -I stdlib -I examples
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_project_check PROPERTIES LABELS "smoke;project")
 
-    # 2. Dedicated test for Module Templates & @if def(...) conditional compilation
-    add_test(
-        NAME foolc_test_import_templates
-        COMMAND foolc "${CMAKE_SOURCE_DIR}/examples/07_import_templates.fo" "${CMAKE_SOURCE_DIR}/examples/07_import_templates.fl"
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    set_tests_properties(foolc_test_import_templates PROPERTIES LABELS "templates;examples")
-
-    # 3. Individual tests for each example file (.fo, .fl, .fex)
-    file(GLOB_RECURSE FOOL_EXAMPLE_FILES
-        LIST_DIRECTORIES false
-        "${CMAKE_SOURCE_DIR}/examples/*.fo"
-        "${CMAKE_SOURCE_DIR}/examples/*.fl"
-        "${CMAKE_SOURCE_DIR}/examples/*.fex"
-    )
-
-    foreach(TEST_FILE ${FOOL_EXAMPLE_FILES})
-        file(RELATIVE_PATH REL_TEST_FILE "${CMAKE_SOURCE_DIR}" "${TEST_FILE}")
-        string(REGEX REPLACE "[/\\\\]" "_" TEST_NAME_CLEAN "${REL_TEST_FILE}")
-        string(REGEX REPLACE "\\." "_" TEST_NAME_CLEAN "${TEST_NAME_CLEAN}")
-
-        add_test(
-            NAME "foolc_test_${TEST_NAME_CLEAN}"
-            COMMAND foolc "${TEST_FILE}"
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
-        set_tests_properties("foolc_test_${TEST_NAME_CLEAN}" PROPERTIES LABELS "examples")
+    # 2. The same workspace for other hosted targets, to exercise @target / @if / platform file selection.
+    #    (wasm/wasi are not listed: the stdlib has no std::io / std::net backend for them yet.)
+    foreach(TARGET_TRIPLE linux-aarch64 darwin-aarch64 windows-x86_64)
+        add_test(NAME "foolc_project_check_${TARGET_TRIPLE}"
+                 COMMAND foolc --project --target ${TARGET_TRIPLE} -I stdlib -I examples
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_project_check_${TARGET_TRIPLE}" PROPERTIES LABELS "project;targets")
     endforeach()
 
-    # 4. Individual tests for standard library files (.fo, .fl, .fex)
-    file(GLOB_RECURSE FOOL_STDLIB_FILES
+    # 2b. Project-mode fixtures: a valid import-template instantiation, and graph errors that must
+    #     be reported (cycle, unresolved import, unknown template parameter).
+    function(add_project_test NAME DIR REGEX LABELS)
+        add_test(NAME "${NAME}"
+                 COMMAND foolc --project -I "tests/project/${DIR}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("${NAME}" PROPERTIES LABELS "${LABELS}" PASS_REGULAR_EXPRESSION "${REGEX}")
+    endfunction()
+
+    add_project_test(foolc_project_templates_ok ok "1 instantiation.s.\\), 0 error" "project;positive")
+    add_project_test(foolc_project_cycle cycle "circular module dependency" "project;negative")
+    add_project_test(foolc_project_unresolved unresolved "unresolved import" "project;negative")
+    add_project_test(foolc_project_bad_template bad_template "has no template parameter" "project;negative")
+
+    # 3. Per-file parse + local checks for every example and stdlib file.
+    file(GLOB_RECURSE FOOL_SOURCE_FILES
         LIST_DIRECTORIES false
-        "${CMAKE_SOURCE_DIR}/stdlib/*.fo"
-        "${CMAKE_SOURCE_DIR}/stdlib/*.fl"
-        "${CMAKE_SOURCE_DIR}/stdlib/*.fex"
+        CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/examples/*.fo" "${CMAKE_SOURCE_DIR}/examples/*.fl" "${CMAKE_SOURCE_DIR}/examples/*.fex"
+        "${CMAKE_SOURCE_DIR}/stdlib/*.fo"   "${CMAKE_SOURCE_DIR}/stdlib/*.fl"   "${CMAKE_SOURCE_DIR}/stdlib/*.fex"
     )
+    foreach(SOURCE_FILE ${FOOL_SOURCE_FILES})
+        file(RELATIVE_PATH REL_FILE "${CMAKE_SOURCE_DIR}" "${SOURCE_FILE}")
+        string(REGEX REPLACE "[/\\\\.]" "_" TEST_NAME_CLEAN "${REL_FILE}")
+        if (REL_FILE MATCHES "^stdlib/")
+            set(TEST_LABEL "stdlib")
+        else()
+            set(TEST_LABEL "examples")
+        endif()
+        add_test(NAME "foolc_file_${TEST_NAME_CLEAN}"
+                 COMMAND foolc -q "${SOURCE_FILE}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_file_${TEST_NAME_CLEAN}" PROPERTIES LABELS "${TEST_LABEL}")
+    endforeach()
 
-    foreach(STDLIB_FILE ${FOOL_STDLIB_FILES})
-        file(RELATIVE_PATH REL_STDLIB_FILE "${CMAKE_SOURCE_DIR}" "${STDLIB_FILE}")
-        string(REGEX REPLACE "[/\\\\]" "_" TEST_NAME_CLEAN "${REL_STDLIB_FILE}")
-        string(REGEX REPLACE "\\." "_" TEST_NAME_CLEAN "${TEST_NAME_CLEAN}")
+    # 4. Negative tests: each file under tests/negative is annotated with `// expect-error:`
+    #    comments; foolc succeeds only when exactly those errors are reported.
+    file(GLOB_RECURSE FOOL_NEGATIVE_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/tests/negative/*.fl" "${CMAKE_SOURCE_DIR}/tests/negative/*.fo")
+    foreach(NEGATIVE_FILE ${FOOL_NEGATIVE_FILES})
+        get_filename_component(NEGATIVE_NAME "${NEGATIVE_FILE}" NAME_WE)
+        add_test(NAME "foolc_negative_${NEGATIVE_NAME}"
+                 COMMAND foolc -q "${NEGATIVE_FILE}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_negative_${NEGATIVE_NAME}" PROPERTIES LABELS "negative")
+    endforeach()
 
-        add_test(
-            NAME "foolc_test_${TEST_NAME_CLEAN}"
-            COMMAND foolc "${STDLIB_FILE}"
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-        )
-        set_tests_properties("foolc_test_${TEST_NAME_CLEAN}" PROPERTIES LABELS "stdlib")
+    # 5. Positive regression tests (must produce no errors).
+    file(GLOB_RECURSE FOOL_POSITIVE_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/tests/positive/*.fl" "${CMAKE_SOURCE_DIR}/tests/positive/*.fo")
+    foreach(POSITIVE_FILE ${FOOL_POSITIVE_FILES})
+        get_filename_component(POSITIVE_NAME "${POSITIVE_FILE}" NAME_WE)
+        add_test(NAME "foolc_positive_${POSITIVE_NAME}"
+                 COMMAND foolc -q "${POSITIVE_FILE}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_positive_${POSITIVE_NAME}" PROPERTIES LABELS "positive")
     endforeach()
 endif()

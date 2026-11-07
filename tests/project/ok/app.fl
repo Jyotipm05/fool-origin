@@ -1,0 +1,7 @@
+module tests::app;
+
+#import tests::engine<FAST = 1, LEVEL = 3>;
+
+fn main_value() -> i32 {
+    return engine::fast_path() + engine::level();
+}

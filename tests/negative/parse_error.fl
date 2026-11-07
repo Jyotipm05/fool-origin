@@ -1,0 +1,7 @@
+module tests::parse_error;
+
+// expect-error: Expected parameter name
+// expect-error: Expected ')' after parameter list
+fn broken( {
+    return;
+}

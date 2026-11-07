@@ -1,0 +1,19 @@
+// A mutating method can not be called through a const reference.
+module tests::const_view_call;
+
+class Counter {
+    value: i32;
+
+    fn bump(this &self);
+}
+
+fn Counter::bump(this &self) {
+    self.value = self.value + 1;
+    return;
+}
+
+fn run(c: const& Counter) {
+    // expect-error: immutable
+    c.bump();
+    return;
+}

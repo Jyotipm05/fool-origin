@@ -1,0 +1,25 @@
+// A consuming receiver (`this self`) moves the value; using it afterwards is an error.
+module tests::use_after_move;
+
+class Handle {
+    id: i32;
+
+    fn close(this self);
+    fn id_of(this const& self) -> i32;
+}
+
+fn Handle::close(this self) {
+    return;
+}
+
+fn Handle::id_of(this const& self) -> i32 {
+    return self.id;
+}
+
+fn run() {
+    var h = Handle { id: 1 };
+    h.close();
+    // expect-error: moved
+    var n = h.id_of();
+    return;
+}

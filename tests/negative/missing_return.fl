@@ -1,0 +1,9 @@
+// Every path of a function with a return type must return a value.
+module tests::missing_return;
+
+// expect-error: return
+fn pick(flag: bool) -> i32 {
+    if (flag) {
+        return 1;
+    }
+}

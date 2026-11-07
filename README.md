@@ -204,8 +204,8 @@ fool-origin/
 │   ├── Lexer/                 # Zero-copy tokenizer
 │   ├── AST/                   # Arena-allocated AST nodes & statements
 │   ├── Parser/                # Pratt & recursive descent parser with error recovery
-│   ├── Sema/                  # Pass 0 Target Pruning, Symbol Tables
-│   └── main.cpp               # Driver CLI and test runner
+│   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker
+│   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
 ├── stdlib/                    # Standard Library (52 files across 7 subsystems)
 │   ├── core/                  # memory, span, atomic, rulesets
 │   ├── io/                    # file I/O, platform syscall bindings
@@ -214,7 +214,9 @@ fool-origin/
 │   ├── net/                   # tcp sockets
 │   ├── math/                  # scalar and SIMD vector math
 │   └── sys/                   # process and environment
-├── CMakeLists.txt             # Modern CMake build configuration
+├── tests/                     # positive/negative regression tests and project-mode fixtures
+├── CMakeLists.txt             # Modern CMake build configuration (Ninja + C++23 modules)
+├── CMakePresets.json          # `cmake --preset default`
 └── fool-vscode-0.1.0.vsix     # Packaged VSIX ready for installation
 ```
 
@@ -237,12 +239,26 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
    Identifiers, tokens, and symbols are interned into compact 32-bit `SymbolID` values for fast $O(1)$ equality comparisons.
 
 4. **Multi-Pass Compilation Pipeline**:
-   - **Pass 0 (Target Pruning)**: Evaluates `@target(os, arch, pointer_width)` attributes, discarding inactive platforms before AST analysis.
-   - **Pass 1 (Symbol Resolution)**: Constructs module dependency graphs and verifies ruleset contracts.
-   - **Pass 2 (Type Checking)**: Enforces immutability on `const&`, validates `constx` compile-time values, and validates receivers.
-   - **Opt-In Borrow Checker**: Static lifetime graphs and alias XOR mutability verification via `--check-borrow`.
+   - **Pass 0 (Target Pruning)**: Evaluates `@target(os, arch, pointer_width)` attributes (several `@target`s are OR'd, keys inside one are AND'd; `os = "posix"` matches linux/darwin/BSDs), top-level and statement-level `@if` conditions, module parameters and `constx` values. Platform files are selected by stem suffix (`_linux`, `_posix`, `_windows`, `_wasm`, `_wasi`, ...). The AST is never mutated, so one tree can be checked under several instantiations.
+   - **Pass 1 (Module Graph)**: Indexes files by their declared module name, resolves `#import`s (including template arguments), reports unresolved/self/cyclic imports and produces a topological compilation order.
+   - **Pass 2 (Type Checking)**: Declaration consistency between `.fo` and `.fl`, duplicate fields/variants/definitions, `const`/`const&`/`const*` immutability, `this` receiver rules, use-after-move for consuming receivers, named/default argument binding, struct-literal field checks, `constx` evaluation with integer range and overflow checks, return-path analysis, `break`/`continue` placement.
+
+### Implementation status
+
+| Area | Status |
+| :--- | :--- |
+| Lexer, Parser (Pratt, speculative generics, error recovery) | Implemented |
+| Pass 0 pruning, `@if def(...)`, const evaluation | Implemented |
+| Pass 1 module graph, import templates, cycle detection | Implemented |
+| Pass 2 checks listed above | Implemented (name/type resolution is structural, not a full type system) |
+| Expression type inference, generics instantiation | Not implemented |
+| Opt-in borrow checker (`--check-borrow`) | **Planned**, no flag exists yet |
+| BMI cache (`.flbmi`), HIR/MIR, code generation | **Planned** |
+
+> Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
 ---
+
 
 ## Standard Library (`stdlib/`)
 
@@ -316,41 +332,40 @@ Fool language support for **CLion**, **IntelliJ IDEA**, **Rider**, and other Jet
 
 ## Building the Compiler
 
-The compiler requires a modern C++23 compiler (MSVC 19.38+ / Clang 17+ / GCC 14+) with C++ modules support and CMake 3.28+.
+The compiler requires a C++23 compiler with named-module support (Clang 17+ with `clang-scan-deps`, GCC 14+, or MSVC 19.38+), CMake 3.28+ and **Ninja** (or Visual Studio). Makefile generators cannot build C++ modules.
 
 ```bash
-mkdir build && cd build
-cmake ..
-cmake --build .
+cmake --preset default            # or: cmake -S . -B build -G Ninja
+cmake --build build
+./build/bin/foolc --help
 ```
 
-To run the test suite:
+If CMake picks the wrong scanner for Clang, pass it explicitly, e.g. `-DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_COMPILER_CLANG_SCAN_DEPS=/usr/bin/clang-scan-deps-18`.
+
+### Using `foolc`
+
 ```bash
-./bin/foolc
-```
-Or test a specific source file:
-```bash
-./bin/foolc ../examples/01_basics.fl
+foolc                                   # project mode over stdlib/ and examples/
+foolc --project -I stdlib -I examples   # explicit search roots
+foolc --graph                           # also print the module compilation order
+foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
+foolc examples/01_basics.fl             # parse + local checks for single files
 ```
 
-### Running Tests with CTest:
-```bash
-ctest --output-on-failure
-```
-Or run by test filter / label:
-```bash
-# Test module templates & conditional compilation (@if def)
-ctest -R foolc_test_import_templates --output-on-failure
+Exit codes: `0` success, `1` diagnostics with errors (or failed expectations), `2` usage error.
 
-# Test by label:
-ctest -L templates --output-on-failure
-ctest -L examples --output-on-failure
-ctest -L stdlib --output-on-failure
+**Expect-error tests.** A file containing `// expect-error: <text>` comments is checked in test mode and passes only if exactly those errors are reported. A trailing comment applies to its own line; a comment on its own line applies to the next line. See `tests/negative/`.
+
+### Running Tests with CTest
+
+```bash
+ctest --test-dir build --output-on-failure
+ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative
 ```
 
 ---
 
 ## License
 
-This project is licensed under the MIT License. See [LICENSE](editors/vscode/LICENSE) for details.
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 

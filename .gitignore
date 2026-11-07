@@ -111,3 +111,7 @@ http-client.private.env.json
 
 # Kubernetes Plugin
 .idea/kubernetes/configs/kubeconfig_*
+
+# foolc build outputs
+build-*/
+.cache/

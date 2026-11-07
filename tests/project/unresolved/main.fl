@@ -1,0 +1,3 @@
+module tests::main;
+
+#import tests::does_not_exist;

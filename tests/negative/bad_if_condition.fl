@@ -1,0 +1,10 @@
+// @if conditions must be compile-time constants.
+module tests::bad_if_condition;
+
+fn run(flag: bool) {
+    // expect-error: compile-time
+    @if (flag) {
+        return;
+    }
+    return;
+}

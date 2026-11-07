@@ -1,0 +1,17 @@
+module tests::named_args;
+
+fn connect(host: i32, port: i32 = 80, retries: i32) -> i32 {
+    return 0;
+}
+
+fn run() {
+    // expect-error: no parameter
+    connect(1, retries: 2, timeout: 3);
+    // expect-error: multiple values
+    connect(1, retries: 2, retries: 3);
+    // expect-error: missing
+    connect(1);
+    // expect-error: too many
+    connect(1, 2, 3, 4);
+    return;
+}

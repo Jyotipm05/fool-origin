@@ -1,0 +1,8 @@
+module tests::signature_mismatch;
+
+fn scale(value: i32, factor: i32) -> i32;
+
+// expect-error: does not match
+fn scale(value: i32) -> i32 {
+    return value;
+}
