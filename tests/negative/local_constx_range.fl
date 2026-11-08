@@ -1,0 +1,14 @@
+// Function-local constx values are visible to later range checks (regression test for a
+// dangling-reference bug in the constant table handed to the evaluator).
+module tests::local_constx_range;
+
+constx GLOBAL_BASE: u8 = 200;
+
+fn run() -> u8 {
+    constx step: u8 = 100;
+    // expect-error: does not fit
+    var a: u8 = GLOBAL_BASE + step;
+    var b: u8 = step + 5;
+    // expect-error: does not fit
+    return GLOBAL_BASE + step;
+}

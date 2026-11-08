@@ -120,6 +120,8 @@ class ConstEvaluator {
 public:
     // 2. Constructors and Destructors in the MIDDLE
     ConstEvaluator(const ConstTable& table, DiagnosticEngine& diag) : m_table(table), m_diag(diag) {}
+    /// The evaluator only keeps a reference; binding it to a temporary would leave it dangling.
+    ConstEvaluator(const ConstTable&& table, DiagnosticEngine& diag) = delete;
 
     // 3. Member functions LAST at the bottom
     /// Returns nullopt (after reporting, unless `report` is false) if `expr` is not a constant expression.

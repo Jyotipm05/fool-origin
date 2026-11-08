@@ -479,7 +479,8 @@ void TypeCheckerPass2::check_statement(const StmtNode* stmt) {
             m_diag.error(ret->m_span, "non-void function '" + qualified_name(m_current_fn) + "' must return a value of type '" +
                                       type_to_string(rt) + "'");
         } else if (ret->m_value != nullptr) {
-            ConstEvaluator evaluator(visible_constants(), m_diag);
+            const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
+            ConstEvaluator evaluator(constants, m_diag);
             if (auto value = evaluator.evaluate(ret->m_value, /*report=*/false)) {
                 check_const_fits_type(rt, *value, ret->m_span, "return value");
             }
@@ -523,7 +524,8 @@ void TypeCheckerPass2::check_statement(const StmtNode* stmt) {
 void TypeCheckerPass2::check_var_decl(const VarDeclNode* var) {
     if (var->m_initializer != nullptr) check_expression(var->m_initializer);
 
-    ConstEvaluator evaluator(visible_constants(), m_diag);
+    const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
+    ConstEvaluator evaluator(constants, m_diag);
     if (var->m_kind == BindingKind::Constx) {
         if (var->m_initializer != nullptr) {
             if (auto value = evaluator.evaluate(var->m_initializer)) {
