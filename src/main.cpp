@@ -9,9 +9,13 @@
  * Exit codes: 0 = success, 1 = diagnostics with errors (or failed expectations), 2 = usage error.
  */
 
+#if defined(__MINGW64__) || defined(__GNUC__)
 #include <cstddef>
+#endif
 #include <cstdint>
+#if defined(__MINGW64__) || defined(__GNUC__)
 #include <cstdlib>
+#endif
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -134,8 +138,7 @@ std::vector<Expectation> parse_expectations(const std::string& source) {
         size_t first = text.find_first_not_of(" \t\r");
         size_t last = text.find_last_not_of(" \t\r");
         text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
-        bool standalone = line.find_first_not_of(" \t") == pos;
-        if (standalone) pending.push_back(std::move(text));
+        if (line.find_first_not_of(" \t") == pos) pending.push_back(std::move(text));
         else expectations.push_back({line_number, std::move(text), false});
     }
     return expectations;

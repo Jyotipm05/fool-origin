@@ -11,7 +11,9 @@
 
 module;
 
+#if defined(__MINGW64__) || defined(__GNUC__)
 #include <cstddef>
+#endif
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -191,7 +193,7 @@ public:
     /// Collects the active declarations of `module`; only those of `section` when it is valid.
     void collect_declarations(const ModuleAST* module, SymbolID section = INVALID_SYMBOL_ID);
     void add_import(ImportDeclNode* decl, const SymbolTablePass0* table);
-    void define(SymbolID name, ConstValue value) { m_definitions[name] = value; }
+    void define(const SymbolID name, const ConstValue &value) { m_definitions[name] = value; }
 
     [[nodiscard]] FunctionDeclNode* find_function(SymbolID name) const;
     [[nodiscard]] FunctionDeclNode* find_method(SymbolID owner, SymbolID name) const;
@@ -363,13 +365,14 @@ private:
     SymbolBinding* lookup(SymbolID name);
     SymbolBinding* lookup_in_current_scope(SymbolID name);
     SymbolBinding* declare(SymbolBinding binding);
-    SymbolBinding make_binding(SymbolID name, const TypeNode* type, BindingKind kind, SourceSpan span) const;
+
+    static SymbolBinding make_binding(SymbolID name, const TypeNode* type, BindingKind kind, const SourceSpan &span);
 
     // declarations
-    void check_declaration_consistency();
-    void check_type_declarations();
+    void check_declaration_consistency() const;
+    void check_type_declarations() const;
     void check_global_variable(const VarDeclNode* var);
-    void check_extern_rules(const FunctionDeclNode* fn);
+    void check_extern_rules(const FunctionDeclNode* fn) const;
 
     // statements
     void check_statements(const std::vector<StmtNode*>& stmts);
@@ -392,7 +395,7 @@ private:
     void bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name);
     [[nodiscard]] const SymbolBinding* root_binding(const ExprNode* expr);
     [[nodiscard]] ConstTable visible_constants() const;
-    void check_const_fits_type(const TypeNode* type, const ConstValue& value, SourceSpan span, std::string_view what);
+    void check_const_fits_type(const TypeNode* type, const ConstValue& value, const SourceSpan &span, std::string_view what) const;
     [[nodiscard]] ClassDeclNode* class_of_binding(const SymbolBinding& binding) const;
 };
 
