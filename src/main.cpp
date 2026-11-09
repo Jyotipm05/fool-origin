@@ -10,6 +10,7 @@
  */
 
 #if defined(__MINGW64__) || defined(__GNUC__)
+#include <algorithm>
 #include <cstddef>
 #endif
 #include <cstdint>
@@ -47,6 +48,8 @@ struct Options {
     bool m_graph{false};
     bool m_quiet{false};
     bool m_check_borrow{false};
+    bool m_warn_shadow{false};
+    bool m_werror{false};
 };
 
 void print_usage() {
@@ -61,6 +64,8 @@ void print_usage() {
         "  -I <dir>               add a module search root (project mode)\n"
         "  --graph                print the module compilation order (project mode)\n"
         "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
+        "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
+        "  -Werror                treat warnings as errors\n"
         "  -q, --quiet            suppress the summary line\n"
         "  -h, --help             show this help\n"
         "\n"
@@ -99,7 +104,7 @@ bool read_file(const fs::path& path, std::string& out) {
 /// Lex, parse, prune and check one file on its own. Imports are not resolved in this mode, so
 /// checks that need symbols from other files are skipped rather than guessed.
 void check_single_file(const fs::path& path, const std::string& source, const fool::TargetConfig& target,
-                       fool::DiagnosticEngine& diag, bool check_borrow) {
+                       fool::DiagnosticEngine& diag, const Options& options) {
     diag.set_current_file(path.string());
     fool::Arena arena;
     fool::Lexer lexer(source, path.string(), diag);
@@ -113,49 +118,68 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     pass0.collect_declarations(module);
 
     fool::TypeCheckerPass2 checker(pass0, diag);
-    if (checker.check_module() && check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
+    checker.set_warn_shadow(options.m_warn_shadow);
+    if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
 }
 
 struct Expectation {
+    fool::Severity m_severity{fool::Severity::Error};
     size_t m_line{0};
     std::string m_text;
     bool m_matched{false};
 };
 
 std::vector<Expectation> parse_expectations(const std::string& source) {
-    static constexpr std::string_view marker = "// expect-error:";
+    struct Marker { std::string_view m_text; fool::Severity m_severity; };
+    static constexpr Marker markers[] = {{"// expect-error:", fool::Severity::Error},
+                                         {"// expect-warning:", fool::Severity::Warning}};
     std::vector<Expectation> expectations;
     std::istringstream stream(source);
     std::string line;
     size_t line_number = 0;
-    std::vector<std::string> pending; // standalone markers apply to the next line
+    std::vector<Expectation> pending; // standalone markers apply to the next line
     while (std::getline(stream, line)) {
         ++line_number;
-        size_t pos = line.find(marker);
-        if (pos == std::string::npos) {
-            for (auto& text : pending) expectations.push_back({line_number, std::move(text), false});
+        const Marker* found = nullptr;
+        size_t pos = std::string::npos;
+        for (const Marker& marker : markers) {
+            if (size_t at = line.find(marker.m_text); at != std::string::npos) {
+                found = &marker;
+                pos = at;
+            }
+        }
+        if (found == nullptr) {
+            for (Expectation& e : pending) {
+                e.m_line = line_number;
+                expectations.push_back(std::move(e));
+            }
             pending.clear();
             continue;
         }
-        std::string text = line.substr(pos + marker.size());
+        std::string text = line.substr(pos + found->m_text.size());
         size_t first = text.find_first_not_of(" \t\r");
         size_t last = text.find_last_not_of(" \t\r");
         text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
-        if (line.find_first_not_of(" \t") == pos) pending.push_back(std::move(text));
-        else expectations.push_back({line_number, std::move(text), false});
+        Expectation expectation{found->m_severity, line_number, std::move(text), false};
+        if (line.find_first_not_of(" \t") == pos) pending.push_back(std::move(expectation));
+        else expectations.push_back(std::move(expectation));
     }
     return expectations;
 }
 
-/// Returns true when the reported errors match the annotations exactly.
+/// Returns true when the reported diagnostics match the annotations exactly. Errors must always be
+/// annotated; warnings only when the file contains at least one `expect-warning` marker.
 bool verify_expectations(const fs::path& path, std::vector<Expectation>& expectations,
                          const fool::DiagnosticEngine& diag) {
     bool ok = true;
+    const bool tracks_warnings = std::any_of(expectations.begin(), expectations.end(), [](const Expectation& e) {
+        return e.m_severity == fool::Severity::Warning;
+    });
     std::vector<bool> used(diag.diagnostics().size(), false);
     for (Expectation& expected : expectations) {
         for (size_t i = 0; i < diag.diagnostics().size(); ++i) {
             const fool::Diagnostic& d = diag.diagnostics()[i];
-            if (used[i] || d.m_severity != fool::Severity::Error) continue;
+            if (used[i] || d.m_severity != expected.m_severity) continue;
             if (d.m_span.m_start.m_line == expected.m_line && d.m_message.find(expected.m_text) != std::string::npos) {
                 used[i] = true;
                 expected.m_matched = true;
@@ -163,14 +187,16 @@ bool verify_expectations(const fs::path& path, std::vector<Expectation>& expecta
             }
         }
         if (!expected.m_matched) {
-            std::cerr << path.string() << ":" << expected.m_line << ": expected error containing '"
+            std::cerr << path.string() << ":" << expected.m_line << ": expected "
+                      << (expected.m_severity == fool::Severity::Warning ? "warning" : "error") << " containing '"
                       << expected.m_text << "' was not reported\n";
             ok = false;
         }
     }
     for (size_t i = 0; i < diag.diagnostics().size(); ++i) {
         const fool::Diagnostic& d = diag.diagnostics()[i];
-        if (d.m_severity == fool::Severity::Error && !used[i]) {
+        const bool relevant = d.m_severity == fool::Severity::Error || (tracks_warnings && d.m_severity == fool::Severity::Warning);
+        if (relevant && !used[i]) {
             std::cerr << "unexpected " << d.format() << "\n";
             ok = false;
         }
@@ -192,10 +218,10 @@ int run_file_mode(const Options& options) {
         std::vector<Expectation> expectations = parse_expectations(source);
         fool::DiagnosticEngine diag;
         diag.set_echo(expectations.empty());
-        check_single_file(path, source, options.m_target, diag, options.m_check_borrow);
+        check_single_file(path, source, options.m_target, diag, options);
 
         if (expectations.empty()) {
-            if (diag.has_errors()) ++failures;
+            if (diag.has_errors() || (options.m_werror && diag.warning_count() > 0)) ++failures;
         } else if (!verify_expectations(path, expectations, diag)) {
             ++failures;
         }
@@ -215,7 +241,7 @@ int run_file_mode(const Options& options) {
 /// and runs the type checker over it with strict name resolution.
 std::unique_ptr<fool::SymbolTablePass0>
 check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrides, const fool::TargetConfig& target,
-                   fool::DiagnosticEngine& diag, bool check_borrow,
+                   fool::DiagnosticEngine& diag, const Options& options,
                    const std::unordered_map<fool::SymbolID, const fool::SymbolTablePass0*>& built) {
     auto table = std::make_unique<fool::SymbolTablePass0>(target, diag);
     table->define_parameters(node.m_parameters, overrides);
@@ -228,7 +254,8 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
     }
     fool::TypeCheckerPass2 checker(*table, diag);
     checker.set_strict_names(true);
-    if (checker.check_module() && check_borrow) fool::BorrowCheckerPass(*table, diag).check_module();
+    checker.set_warn_shadow(options.m_warn_shadow);
+    if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(*table, diag).check_module();
     return table;
 }
 
@@ -265,7 +292,7 @@ int run_project_mode(const Options& options) {
     size_t instantiations = 0;
     for (fool::SymbolID id : graph.get_compilation_order()) {
         const fool::ModuleNode* node = graph.get_module(id);
-        owned.push_back(check_module_group(*node, {}, options.m_target, diag, options.m_check_borrow, built));
+        owned.push_back(check_module_group(*node, {}, options.m_target, diag, options, built));
         built[id] = owned.back().get();
 
         // Each distinct set of import template arguments is checked as its own instantiation, so
@@ -273,7 +300,7 @@ int run_project_mode(const Options& options) {
         for (const fool::ModuleInstantiation& inst : node->m_instantiations) {
             ++instantiations;
             size_t before = diag.error_count();
-            check_module_group(*node, inst.m_overrides, options.m_target, diag, options.m_check_borrow, built);
+            check_module_group(*node, inst.m_overrides, options.m_target, diag, options, built);
             if (diag.error_count() != before) std::cerr << "note: errors above occurred in instantiation '" << inst.m_key << "'\n";
         }
     }
@@ -281,9 +308,10 @@ int run_project_mode(const Options& options) {
     if (!options.m_quiet) {
         std::cout << "foolc: checked " << graph.modules().size() << " module(s) from " << graph.indexed_file_count()
                   << " file(s) for " << options.m_target.to_string() << " (" << instantiations
-                  << " instantiation(s)), " << diag.error_count() << " error(s)\n";
+                  << " instantiation(s)), " << diag.error_count() << " error(s), " << diag.warning_count()
+                  << " warning(s)\n";
     }
-    return diag.has_errors() ? 1 : 0;
+    return (diag.has_errors() || (options.m_werror && diag.warning_count() > 0)) ? 1 : 0;
 }
 
 } // namespace
@@ -306,6 +334,10 @@ int main(const int argc, char** argv) {
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;
+        } else if (arg == "--warn-shadow") {
+            options.m_warn_shadow = true;
+        } else if (arg == "-Werror") {
+            options.m_werror = true;
         } else if (arg == "--check-borrow") {
             options.m_check_borrow = true;
         } else if (arg == "-q" || arg == "--quiet") {

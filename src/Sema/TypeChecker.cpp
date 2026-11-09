@@ -9,6 +9,7 @@
 
 module;
 #include <ranges>
+#include <memory>
 #include <optional>
 
 #if defined(__MINGW64__) || defined(__GNUC__)
@@ -112,8 +113,27 @@ namespace fool {
         return nullptr;
     }
 
+    /// `--warn-shadow`: the declaration is about to enter the innermost scope; report what it hides.
+    void TypeCheckerPass2::warn_if_shadowing(const SymbolBinding &binding) const {
+        // Outer local scopes, innermost first (the scope the binding goes into is the last one).
+        for (size_t i = m_scopes.size() - 1; i-- > 0;) {
+            for (auto it = m_scopes[i].rbegin(); it != m_scopes[i].rend(); ++it) {
+                if (it->m_name != binding.m_name) continue;
+                m_diag.warning(binding.m_span, "declaration of '" + name_of(binding.m_name) +
+                                               "' shadows a declaration in an enclosing scope");
+                m_diag.note(it->m_span, "the shadowed declaration is here");
+                return;
+            }
+        }
+        if (const VarDeclNode *global = m_pass0.find_global(binding.m_name)) {
+            m_diag.warning(binding.m_span, "declaration of '" + name_of(binding.m_name) + "' shadows a global variable");
+            m_diag.note(global->m_span, "the global variable is declared here");
+        }
+    }
+
     SymbolBinding *TypeCheckerPass2::declare(SymbolBinding binding) {
         if (m_scopes.empty()) push_scope();
+        if (m_warn_shadow) warn_if_shadowing(binding);
         m_scopes.back().push_back(std::move(binding));
         return &m_scopes.back().back();
     }
@@ -129,6 +149,7 @@ namespace fool {
             binding.m_is_pointer = type->m_kind == TypeNodeKind::Pointer;
             binding.m_is_view = type->is_view();
             binding.m_type_name = nominal_name(type);
+            binding.m_static_type = static_type_of(type);
         }
         return binding;
     }
@@ -405,7 +426,7 @@ namespace fool {
                 var->m_type, it->second, var->m_span, "constant");
             return;
         }
-        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag);
+        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
         if (const auto value = evaluator.evaluate(var->m_initializer, /*report=*/false)) {
             check_const_fits_type(var->m_type, *value, var->m_span, "variable");
         }
@@ -441,6 +462,18 @@ namespace fool {
                                    : (owner != nullptr ? owner->m_name : INVALID_SYMBOL_ID);
             self.m_is_view = fn->m_receiver.m_kind != ReceiverKind::ByValue;
             self.m_is_const_view = fn->m_receiver.m_kind == ReceiverKind::ByConstRef;
+            if (self.m_type_name != INVALID_SYMBOL_ID) {
+                StaticType owner_type;
+                owner_type.m_kind = StaticType::Kind::Named;
+                owner_type.m_name = self.m_type_name;
+                if (fn->m_receiver.m_kind == ReceiverKind::ByValue) {
+                    self.m_static_type = owner_type;
+                } else {
+                    self.m_static_type.m_kind = StaticType::Kind::Reference;
+                    self.m_static_type.m_const = fn->m_receiver.m_kind == ReceiverKind::ByConstRef;
+                    self.m_static_type.m_pointee = std::make_shared<StaticType>(owner_type);
+                }
+            }
             declare(self);
         }
 
@@ -451,7 +484,7 @@ namespace fool {
             }
             declare(make_binding(param.m_name, param.m_type, BindingKind::Mutable, param.m_span));
             if (param.m_default_value != nullptr) {
-                ConstEvaluator evaluator(m_pass0.definitions(), m_diag);
+                ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
                 if (auto value = evaluator.evaluate(param.m_default_value, /*report=*/false)) {
                     check_const_fits_type(param.m_type, *value, param.m_span, "parameter default");
                 }
@@ -476,7 +509,7 @@ namespace fool {
     // ---------------------------------------------------------------------------------------------
 
     const ConditionalBranch *TypeCheckerPass2::select_branch(const ConditionalStmt *stmt, const bool report) const {
-        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag);
+        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
         for (const ConditionalBranch &branch: stmt->m_branches) {
             if (branch.m_condition == nullptr) return &branch; // @else
             const auto value = evaluator.evaluate(branch.m_condition, report);
@@ -527,7 +560,7 @@ namespace fool {
                              type_to_string(rt) + "'");
             } else if (ret->m_value != nullptr) {
                 const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
-                const ConstEvaluator evaluator(constants, m_diag);
+                const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
                 if (const auto value = evaluator.evaluate(ret->m_value, /*report=*/false)) {
                     check_const_fits_type(rt, *value, ret->m_span, "return value");
                 }
@@ -576,7 +609,7 @@ namespace fool {
         if (var->m_initializer != nullptr) check_expression(var->m_initializer);
 
         const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
-        const ConstEvaluator evaluator(constants, m_diag);
+        const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
         std::optional<ConstValue> constant;
         if (var->m_kind == BindingKind::Constx) {
             if (var->m_initializer != nullptr) {
@@ -607,6 +640,7 @@ namespace fool {
             }
         }
         binding.m_constant = constant;
+        if (var->m_type == nullptr && var->m_initializer != nullptr) binding.m_static_type = infer_type(var->m_initializer);
         declare(binding);
     }
 

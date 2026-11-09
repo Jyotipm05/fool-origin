@@ -1,0 +1,8 @@
+module tests::const_casts_invalid;
+
+// expect-error: does not fit
+constx TOO_BIG: u8 = @static_cast<u8>(256);
+// expect-error: does not fit
+constx NEGATIVE: u32 = @static_cast<u32>(0 - 1);
+// expect-error: not allowed in a compile-time constant
+constx NOT_CONST: u32 = @reinterpret_cast<u32>(0);

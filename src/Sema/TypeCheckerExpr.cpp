@@ -124,6 +124,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
         }
     } else if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) {
         check_expression(cast->m_operand);
+        if (cast->m_cast_kind != CastKind::Unchecked) check_named_cast(cast);
     } else if (const auto* member = dynamic_cast<const MemberExpr*>(expr)) {
         check_member_access(member);
     } else if (const auto* index = dynamic_cast<const IndexExpr*>(expr)) {

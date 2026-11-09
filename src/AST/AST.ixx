@@ -242,14 +242,25 @@ public:
         : m_op(op), m_lhs(l), m_rhs(r) {}
 };
 
+/// Which cast spelling produced a CastExpr.
+enum class CastKind : uint8_t {
+    Unchecked,   ///< `expr as T`: unchecked, C-style conversion (kept for FFI and low-level code)
+    Static,      ///< `@static_cast<T>(expr)`: value-preserving numeric / pointer-qualification conversion
+    Dynamic,     ///< `@dynamic_cast<*T>(expr)`: checked downcast of a ruleset view, null on mismatch
+    Reinterpret, ///< `@reinterpret_cast<T>(expr)`: pointer <-> pointer / pointer-sized integer, never drops const
+    Bit          ///< `@bit_cast<T>(expr)`: reinterpret the object representation of a same-sized value
+};
+
 class CastExpr : public ExprNode {
 public:
     // 1. Member variables
     ExprNode* m_operand{nullptr};
     TypeNode* m_target{nullptr};
+    CastKind m_cast_kind{CastKind::Unchecked};
 
     // 2. Constructors
-    CastExpr(ExprNode* operand, TypeNode* target) : m_operand(operand), m_target(target) {}
+    CastExpr(ExprNode* operand, TypeNode* target, CastKind kind = CastKind::Unchecked)
+        : m_operand(operand), m_target(target), m_cast_kind(kind) {}
 };
 
 class MemberExpr : public ExprNode {

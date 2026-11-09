@@ -1,0 +1,15 @@
+// Sibling scopes reusing a name do not shadow each other, so no warning is expected.
+module tests::no_shadow;
+
+fn run() -> i32 {
+    var sum = 0;
+    {
+        var a = 1;
+        sum = sum + a;
+    }
+    {
+        var a = 2;
+        sum = sum + a;
+    }
+    return sum;
+}

@@ -297,6 +297,16 @@ ExprNode* Parser::parse_intrinsic_call() {
     advance(); // '@'
     Token name = consume(TokenKind::Identifier, "Expected intrinsic name after '@'");
     if (name.m_kind == TokenKind::Invalid) return nullptr;
+
+    // Named casts: @static_cast<T>(expr), @dynamic_cast<T>(expr), @reinterpret_cast<T>(expr), @bit_cast<T>(expr).
+    const std::string_view intrinsic_name = StringInterner::get().resolve(name.m_symbol_id);
+    CastKind cast_kind = CastKind::Unchecked;
+    if (intrinsic_name == "static_cast") cast_kind = CastKind::Static;
+    else if (intrinsic_name == "dynamic_cast") cast_kind = CastKind::Dynamic;
+    else if (intrinsic_name == "reinterpret_cast") cast_kind = CastKind::Reinterpret;
+    else if (intrinsic_name == "bit_cast") cast_kind = CastKind::Bit;
+    if (cast_kind != CastKind::Unchecked) return parse_named_cast(start, intrinsic_name, cast_kind);
+
     auto* call = m_arena.create<IntrinsicCallExpr>();
     call->m_name = name.m_symbol_id;
     consume(TokenKind::OpenParen, "Expected '(' after intrinsic name");
@@ -315,6 +325,46 @@ ExprNode* Parser::parse_intrinsic_call() {
     consume(TokenKind::CloseParen, "Expected ')' after intrinsic arguments");
     call->m_span = span_from(start);
     return call;
+}
+
+/// Parses the rest of a named cast after `@name`: `<Type>(expr)`.
+ExprNode* Parser::parse_named_cast(SourceLocation start, std::string_view name, CastKind kind) {
+    const std::string spelling = "@" + std::string(name);
+    if (!check(TokenKind::Less)) {
+        error_here("Expected '<' and a target type after '" + spelling + "', e.g. " + spelling + "<T>(value)");
+        // Recover by parsing the parenthesized operand so that no follow-up errors cascade.
+        if (!match(TokenKind::OpenParen)) return nullptr;
+        ExprNode* operand = parse_expression();
+        consume(TokenKind::CloseParen, "Expected ')' after the operand of '" + spelling + "'");
+        return operand;
+    }
+    advance(); // '<'
+    bool saved_angle = m_in_angle_list;
+    bool saved_no_struct = m_no_struct_literal;
+    m_in_angle_list = true;
+    TypeNode* target = parse_type();
+    m_in_angle_list = saved_angle;
+    if (target == nullptr) return nullptr;
+    consume(TokenKind::Greater, "Expected '>' after the target type of '" + spelling + "'");
+
+    consume(TokenKind::OpenParen, "Expected '(' before the operand of '" + spelling + "'");
+    m_no_struct_literal = false;
+    m_in_angle_list = false;
+    ExprNode* operand = parse_expression();
+    m_no_struct_literal = saved_no_struct;
+    m_in_angle_list = saved_angle;
+    if (operand == nullptr) return nullptr;
+    if (check(TokenKind::Comma)) {
+        error_here("'" + spelling + "' takes exactly one operand");
+        while (match(TokenKind::Comma)) {
+            if (parse_expression() == nullptr) break;
+        }
+    }
+    consume(TokenKind::CloseParen, "Expected ')' after the operand of '" + spelling + "'");
+
+    auto* cast = m_arena.create<CastExpr>(operand, target, kind);
+    cast->m_span = span_from(start);
+    return cast;
 }
 
 ExprNode* Parser::parse_path_expression() {

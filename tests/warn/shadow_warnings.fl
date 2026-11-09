@@ -1,0 +1,22 @@
+// Run with --warn-shadow: declarations that hide an outer variable or a global are reported.
+module tests::shadow_warnings;
+
+var counter: i32 = 0;
+
+fn run(count: i32) -> i32 {
+    var total = 1;
+    {
+        // expect-warning: shadows a declaration in an enclosing scope
+        var total = 2;
+        total = total + 1;
+    }
+    if (count > 0) {
+        // expect-warning: shadows a declaration in an enclosing scope
+        var count = 5;
+        total = total + count;
+    }
+    // expect-warning: shadows a global variable
+    var counter = 3;
+    var unrelated = 4;
+    return total + counter + unrelated;
+}

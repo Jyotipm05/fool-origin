@@ -1,0 +1,58 @@
+// The four named casts, used the way they are meant to be.
+module tests::named_casts;
+
+class Pair {
+    left: u32;
+    right: u32;
+}
+
+class Wide {
+    value: u64;
+}
+
+class Square {
+    side: i32;
+}
+
+ruleset Shape {
+    fn area(this const& self) -> i32;
+}
+
+fn run(count: i32, ratio: f32, raw: *void, view: const* u8, shape: &Shape, wide: u64) -> i32 {
+    // @static_cast: checked, value-preserving conversions
+    var a = @static_cast<u8>(200);
+    var b = @static_cast<i64>(count);
+    var c = @static_cast<f64>(ratio);
+    var d = @static_cast<i32>(ratio);
+    var e = @static_cast<*u8>(raw);
+    var f = @static_cast<*void>(e);
+    var g = @static_cast<const* u8>(e);
+    var h = @static_cast<usize>(@static_cast<u32>(count) + 1);
+    var drop = @static_cast<void>(count);
+
+    // @bit_cast: same size, reinterprets the bits
+    var bits = @bit_cast<u32>(ratio);
+    var back = @bit_cast<f32>(bits);
+    var joined = @bit_cast<Wide>(Pair { left: 1, right: 2 });
+    var signed_wide = @bit_cast<i64>(wide);
+
+    // @reinterpret_cast: pointers and pointer-sized integers only, never drops const
+    var address = @reinterpret_cast<usize>(raw);
+    var typed = @reinterpret_cast<*i32>(address);
+    var words = @reinterpret_cast<const* u32>(view);
+
+    // @dynamic_cast: checked downcast of a ruleset view, null when the type does not match
+    var square = @dynamic_cast<*Square>(shape);
+    var read_only = @dynamic_cast<const* Square>(shape);
+    return count;
+}
+
+// Variables initialized from literals adapt to the type they are cast through.
+fn literals() {
+    var x = 1;
+    var p = @static_cast<*i32>(&x);
+    var q = @static_cast<const* i64>(&x);
+    var y = 2.5;
+    var r = @static_cast<*f32>(&y);
+    return;
+}

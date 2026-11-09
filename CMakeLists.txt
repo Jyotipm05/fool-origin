@@ -31,6 +31,7 @@ add_executable(foolc
         src/Sema/ModuleGraph.cpp
         src/Sema/TypeChecker.cpp
         src/Sema/TypeCheckerExpr.cpp
+        src/Sema/TypeCheckerCasts.cpp
         src/Sema/BorrowChecker.cpp
 )
 
@@ -150,4 +151,22 @@ if (BUILD_TESTING)
              COMMAND foolc --project --check-borrow -I stdlib -I examples
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(foolc_project_check_borrow PROPERTIES LABELS "project;borrow")
+    # 8. Warnings: fixtures run with --warn-shadow (expect-warning markers); a clean file must also pass -Werror.
+    file(GLOB_RECURSE FOOL_WARN_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/tests/warn/*.fl")
+    foreach(WARN_FILE ${FOOL_WARN_FILES})
+        get_filename_component(WARN_NAME "${WARN_FILE}" NAME_WE)
+        add_test(NAME "foolc_warn_${WARN_NAME}"
+                 COMMAND foolc -q --warn-shadow "${WARN_FILE}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_warn_${WARN_NAME}" PROPERTIES LABELS "warn")
+    endforeach()
+    add_test(NAME foolc_warn_clean_werror
+             COMMAND foolc -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/warn/no_shadow.fl"
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_warn_clean_werror PROPERTIES LABELS "warn")
+    add_test(NAME foolc_warn_werror_fails
+             COMMAND foolc -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/positive/shadowing.fl"
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_warn_werror_fails PROPERTIES LABELS "warn" WILL_FAIL TRUE)
 endif()

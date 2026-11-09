@@ -1,0 +1,9 @@
+module tests::named_cast_syntax;
+
+fn run(count: i32) {
+    // expect-error: Expected '<'
+    var a = @static_cast(count);
+    // expect-error: takes exactly one operand
+    var b = @bit_cast<u32>(count, count);
+    return;
+}

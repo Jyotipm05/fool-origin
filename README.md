@@ -102,8 +102,40 @@ fn run(count: i32) -> i32 {
 - Shadowing also applies to `constx`: a local that shadows a constant hides its compile-time value inside the block.
 - One deliberate difference from C++: a declaration's initializer is evaluated *before* the new name enters scope, so
   `var total = total + 1;` in a nested block reads the outer `total` instead of the variable being declared.
+- `foolc --warn-shadow` reports every declaration that hides a variable of an enclosing scope or a global variable
+  (with a note at the hidden declaration), like C++ `-Wshadow`; `-Werror` turns warnings into a failing exit code.
+  Sibling scopes reusing a name do not count as shadowing. Test files can assert warnings with `// expect-warning: <text>`.
 - The checker, the const evaluator and the borrow checker all use the same scoping, so a shadowing variable is never
   confused with the one it hides.
+
+---
+
+### 2c. Casts
+
+`expr as T` stays as the unchecked, C-style conversion (needed for FFI and low-level code; it wraps instead of failing).
+Everything else is spelled as a named cast, `@name<T>(expr)`, and is validated by the checker:
+
+| Cast | Allowed conversions | Rejected with an error |
+| :--- | :--- | :--- |
+| `@static_cast<T>(x)` | integer / float / `bool`-to-integer conversions, `*void` ⇄ `*U`, `&T` → `*T`, adding `const` | pointer ⇄ integer, unrelated pointee types, removing `const`, `*T` → `&T`, anything → `bool` (compare explicitly), a **constant** that does not fit the target |
+| `@dynamic_cast<*T>(x)` | checked downcast of a ruleset view (`&Shape` / `*Shape`) to a class or struct pointer; the result is `null` when the dynamic type is not `T` | non-pointer target, primitive / ruleset / enum target, operand that is not a ruleset view, removing `const` |
+| `@reinterpret_cast<T>(x)` | pointer ⇄ pointer, pointer ⇄ **pointer-sized** integer (`usize` / `isize`, width taken from `--target`), `&T`/`*T` → `*U` | removing `const`, producing a reference, any other pair (it points you to `@static_cast` or `@bit_cast`) |
+| `@bit_cast<T>(x)` | reinterpret the bytes of a value as another type of **exactly the same size** (`f32` ⇄ `u32`, a struct ⇄ an integer, ...) | different sizes (both are printed), references, types of unknown size |
+
+```fool
+var bits  = @bit_cast<u32>(ratio);            // f32 -> u32, same 4 bytes
+var small = @static_cast<u8>(300);            // error: constant 300 does not fit in 'u8'
+var addr  = @reinterpret_cast<usize>(raw);    // pointer -> pointer-sized integer
+var sq    = @dynamic_cast<*Square>(shape);    // null unless `shape` really is a Square
+```
+
+- Sizes follow natural C layout (fields in declaration order, padded to their alignment) and use the target's pointer width.
+- `@static_cast` and `@bit_cast` between scalars (and `as`) are folded inside `constx` initializers, e.g.
+  `constx ONE_BITS: u32 = @bit_cast<u32>(@static_cast<f32>(1.0));`. Pointer casts are never constant.
+- Type information is inferred conservatively (literals adapt to the type they are cast through; generics and values
+  of unknown type skip the check instead of guessing).
+- `@dynamic_cast` is only type-checked today: classes do not declare which rulesets they implement and there is no
+  code generator yet, so conformance and the runtime type test are future work.
 
 ---
 
@@ -281,7 +313,7 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 | Lexer, Parser (Pratt, speculative generics, error recovery) | Implemented |
 | Pass 0 pruning, `@if def(...)`, const evaluation | Implemented |
 | Pass 1 module graph, import templates, cycle detection | Implemented |
-| Pass 2 checks listed above | Implemented (name/type resolution is structural, not a full type system) |
+| Pass 2 checks listed above, named casts | Implemented (name/type resolution is structural, not a full type system) |
 | Expression type inference, generics instantiation | Not implemented |
 | Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
 | BMI cache (`.flbmi`), HIR/MIR, code generation | **Planned** (`src/Module/BMICache.cpp` is an unfinished draft and is not built) |
@@ -380,6 +412,7 @@ foolc                                   # project mode over stdlib/ and examples
 foolc --project -I stdlib -I examples   # explicit search roots
 foolc --graph                           # also print the module compilation order
 foolc --check-borrow                    # additionally run the opt-in borrow checker
+foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
 foolc examples/01_basics.fl             # parse + local checks for single files
 ```

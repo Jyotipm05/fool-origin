@@ -75,6 +75,7 @@ private:
     ExprNode* parse_primary();
     ExprNode* parse_path_expression();
     ExprNode* parse_intrinsic_call();
+    ExprNode* parse_named_cast(SourceLocation start, std::string_view name, CastKind kind);
     ExprNode* parse_number();
     [[nodiscard]] bool looks_like_struct_body() const;
     void parse_call_arguments(CallExpr* call);

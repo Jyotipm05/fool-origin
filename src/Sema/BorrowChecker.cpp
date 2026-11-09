@@ -180,7 +180,7 @@ void BorrowCheckerPass::report_write(const std::vector<SymbolID>& place, SourceS
 }
 
 const ConditionalBranch* BorrowCheckerPass::select_branch(const ConditionalStmt* stmt) const {
-    ConstEvaluator evaluator(m_symbols.definitions(), m_diag);
+    ConstEvaluator evaluator(m_symbols.definitions(), m_diag, m_symbols.target().m_pointer_width);
     for (const ConditionalBranch& branch : stmt->m_branches) {
         if (branch.m_condition == nullptr) return &branch;
         auto value = evaluator.evaluate(branch.m_condition, /*report=*/false);

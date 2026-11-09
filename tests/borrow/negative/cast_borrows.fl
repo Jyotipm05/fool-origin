@@ -1,0 +1,15 @@
+// Borrows survive named casts: `p` still borrows `x` after the static_cast.
+module tests::borrow_cast_borrows;
+
+fn touch(a: const* i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var p = @static_cast<const* i32>(&x);
+    // expect-error: cannot assign to 'x' because it is borrowed by 'p'
+    x = 2;
+    touch(p);
+    return;
+}

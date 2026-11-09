@@ -9,7 +9,9 @@
 
 module;
 
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -46,6 +48,7 @@ std::optional<ConstValue> ConstEvaluator::evaluate(const ExprNode* expr, bool re
         return fail(expr, report, "'" + std::string(StringInterner::get().resolve(id->m_identifier)) +
                                   "' is not a known compile-time constant");
     }
+    if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) return eval_cast(cast, report);
     if (const auto* un = dynamic_cast<const UnaryExpr*>(expr)) return eval_unary(un, report);
     if (const auto* bin = dynamic_cast<const BinaryExpr*>(expr)) return eval_binary(bin, report);
 
@@ -61,6 +64,131 @@ std::optional<ConstValue> ConstEvaluator::evaluate(const ExprNode* expr, bool re
         }
     }
     return fail(expr, report, "expression is not a compile-time constant");
+}
+
+namespace {
+
+struct ScalarType {
+    enum class Kind { None, Int, Float, Bool } m_kind{Kind::None};
+    unsigned m_bits{0};
+    bool m_signed{false};
+};
+
+ScalarType scalar_type_of(const TypeNode* type, unsigned pointer_width) {
+    using Kind = ScalarType::Kind;
+    if (type == nullptr || type->m_kind != TypeNodeKind::Path || type->m_path.size() != 1 || !type->m_generic_args.empty()) return {};
+    const std::string_view name = StringInterner::get().resolve(type->m_path.front());
+    if (name == "i8") return {Kind::Int, 8, true};
+    if (name == "i16") return {Kind::Int, 16, true};
+    if (name == "i32") return {Kind::Int, 32, true};
+    if (name == "i64") return {Kind::Int, 64, true};
+    if (name == "isize") return {Kind::Int, pointer_width, true};
+    if (name == "u8") return {Kind::Int, 8, false};
+    if (name == "u16") return {Kind::Int, 16, false};
+    if (name == "u32") return {Kind::Int, 32, false};
+    if (name == "u64") return {Kind::Int, 64, false};
+    if (name == "usize") return {Kind::Int, pointer_width, false};
+    if (name == "f32") return {Kind::Float, 32, true};
+    if (name == "f64") return {Kind::Float, 64, true};
+    if (name == "bool") return {Kind::Bool, 8, false};
+    return {};
+}
+
+bool fits(int64_t value, const ScalarType& type) {
+    if (type.m_bits >= 64) return type.m_signed || value >= 0;
+    if (type.m_signed) return value >= -(int64_t{1} << (type.m_bits - 1)) && value <= (int64_t{1} << (type.m_bits - 1)) - 1;
+    return value >= 0 && value <= (int64_t{1} << type.m_bits) - 1;
+}
+
+/// Two's complement truncation of `value` to the width of `type`, sign-extended for signed types.
+int64_t wrap_to(int64_t value, const ScalarType& type) {
+    if (type.m_bits >= 64) return value;
+    const uint64_t mask = (uint64_t{1} << type.m_bits) - 1;
+    uint64_t bits = static_cast<uint64_t>(value) & mask;
+    if (type.m_signed && (bits >> (type.m_bits - 1)) != 0) bits |= ~mask;
+    return static_cast<int64_t>(bits);
+}
+
+} // namespace
+
+/// Folds `as`, `@static_cast` and `@bit_cast` between scalar types. Pointer casts are never constant.
+std::optional<ConstValue> ConstEvaluator::eval_cast(const CastExpr* cast, bool report) const {
+    using Kind = ScalarType::Kind;
+    const ScalarType target = scalar_type_of(cast->m_target, m_pointer_width);
+    if (target.m_kind == Kind::None || cast->m_cast_kind == CastKind::Dynamic || cast->m_cast_kind == CastKind::Reinterpret) {
+        return fail(cast, report, "this cast is not allowed in a compile-time constant");
+    }
+    auto operand = evaluate(cast->m_operand, report);
+    if (!operand) return std::nullopt;
+
+    if (cast->m_cast_kind == CastKind::Bit) {
+        // The operand's own width is not tracked; the target's width decides how the bits are read.
+        if (target.m_kind == Kind::Int && operand->m_kind == ConstValue::Kind::Float) {
+            if (target.m_bits == 32) {
+                float narrow = static_cast<float>(operand->m_float);
+                uint32_t bits = 0;
+                std::memcpy(&bits, &narrow, sizeof bits);
+                return ConstValue::from_int(wrap_to(static_cast<int64_t>(bits), target));
+            }
+            if (target.m_bits == 64) {
+                uint64_t bits = 0;
+                std::memcpy(&bits, &operand->m_float, sizeof bits);
+                if (!target.m_signed && bits > static_cast<uint64_t>(INT64_MAX)) {
+                    return fail(cast, report, "constant does not fit in a 64-bit unsigned compile-time integer");
+                }
+                return ConstValue::from_int(static_cast<int64_t>(bits));
+            }
+        } else if (target.m_kind == Kind::Float && operand->m_kind == ConstValue::Kind::Int) {
+            if (target.m_bits == 32) {
+                uint32_t bits = static_cast<uint32_t>(static_cast<uint64_t>(operand->m_int));
+                float wide = 0;
+                std::memcpy(&wide, &bits, sizeof bits);
+                return ConstValue::from_float(static_cast<double>(wide));
+            }
+            double wide = 0;
+            std::memcpy(&wide, &operand->m_int, sizeof wide);
+            return ConstValue::from_float(wide);
+        } else if (target.m_kind == Kind::Int && operand->m_kind != ConstValue::Kind::Float) {
+            const int64_t source = operand->as_int();
+            if (!target.m_signed && target.m_bits >= 64 && source < 0) {
+                return fail(cast, report, "constant does not fit in a 64-bit unsigned compile-time integer");
+            }
+            return ConstValue::from_int(wrap_to(source, target));
+        } else if (target.m_kind == Kind::Bool && operand->m_kind == ConstValue::Kind::Bool) {
+            return operand;
+        }
+        return fail(cast, report, "@bit_cast between these constant types is not supported");
+    }
+
+    const bool wrap = cast->m_cast_kind == CastKind::Unchecked; // `as` wraps, @static_cast must be exact
+    switch (target.m_kind) {
+        case Kind::Int: {
+            int64_t integer = 0;
+            if (operand->m_kind == ConstValue::Kind::Float) {
+                if (!std::isfinite(operand->m_float) || std::fabs(operand->m_float) >= 9.2e18) {
+                    return fail(cast, report, "floating-point constant is out of range for an integer");
+                }
+                integer = static_cast<int64_t>(operand->m_float);
+            } else {
+                integer = operand->as_int();
+            }
+            if (wrap) return ConstValue::from_int(wrap_to(integer, target));
+            if (!fits(integer, target)) {
+                return fail(cast, report, "constant " + std::to_string(integer) + " does not fit in the target type of @static_cast");
+            }
+            return ConstValue::from_int(integer);
+        }
+        case Kind::Float: {
+            double real = operand->as_double();
+            if (target.m_bits == 32) real = static_cast<double>(static_cast<float>(real));
+            return ConstValue::from_float(real);
+        }
+        case Kind::Bool:
+            if (!wrap) return fail(cast, report, "@static_cast to bool is not allowed; compare explicitly");
+            return ConstValue::from_bool(operand->truthy());
+        default: break;
+    }
+    return fail(cast, report, "this cast is not allowed in a compile-time constant");
 }
 
 std::optional<ConstValue> ConstEvaluator::eval_unary(const UnaryExpr* expr, bool report) const {

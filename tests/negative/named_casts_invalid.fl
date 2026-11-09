@@ -1,0 +1,41 @@
+module tests::named_casts_invalid;
+
+class Square {
+    side: i32;
+}
+
+ruleset Shape {
+    fn area(this const& self) -> i32;
+}
+
+fn run(count: i32, ratio: f32, raw: *void, bytes: *u8, view: const* u8, shape: &Shape, plain: *i32) {
+    // expect-error: does not fit in 'u8'
+    var a = @static_cast<u8>(300);
+    // expect-error: does not convert between pointers and integers
+    var b = @static_cast<u32>(raw);
+    // expect-error: unrelated pointer types
+    var c = @static_cast<*u32>(bytes);
+    // expect-error: would discard 'const'
+    var d = @static_cast<*u8>(view);
+    // expect-error: to 'bool'
+    var e = @static_cast<bool>(count);
+    // expect-error: pointer-sized integer
+    var f = @reinterpret_cast<u32>(raw);
+    // expect-error: only converts between pointers and pointer-sized integers
+    var g = @reinterpret_cast<f32>(count);
+    // expect-error: would discard 'const'
+    var h = @reinterpret_cast<*u8>(view);
+    // expect-error: requires types of the same size
+    var i = @bit_cast<u64>(count);
+    // expect-error: can not convert references
+    var j = @bit_cast<i32>(&count);
+    // expect-error: needs a pointer target type
+    var k = @dynamic_cast<u32>(shape);
+    // expect-error: must point to a class or struct
+    var l = @dynamic_cast<*u32>(shape);
+    // expect-error: needs a view of a ruleset
+    var m = @dynamic_cast<*Square>(plain);
+    // expect-error: would discard 'const'
+    var n = @dynamic_cast<*Square>(@static_cast<const& Shape>(shape));
+    return;
+}

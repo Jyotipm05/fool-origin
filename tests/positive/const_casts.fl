@@ -1,0 +1,25 @@
+// Named casts fold at compile time inside constx initializers.
+module tests::const_casts;
+
+constx BYTE: u8 = @static_cast<u8>(255);
+constx TRUNCATED: i32 = @static_cast<i32>(3.9);
+constx WIDE: f64 = @static_cast<f64>(7);
+constx ONE_BITS: u32 = @bit_cast<u32>(@static_cast<f32>(1.0));
+constx BACK: f32 = @bit_cast<f32>(1065353216);
+constx NEG_BYTE: u8 = @bit_cast<u8>(@static_cast<i8>(-1));
+constx WRAPPED: u8 = 300 as u8;
+constx LIMIT: u8 = BYTE;
+
+// Exactness checks: `X - E` and `E - X` both fit in a u8 only when X == E.
+constx TRUNCATED_LO: u8 = @static_cast<u8>(TRUNCATED - 3);
+constx TRUNCATED_HI: u8 = @static_cast<u8>(3 - TRUNCATED);
+constx ONE_BITS_LO: u8 = @static_cast<u8>(ONE_BITS - 1065353216);
+constx ONE_BITS_HI: u8 = @static_cast<u8>(1065353216 - ONE_BITS);
+constx NEG_BYTE_LO: u8 = @static_cast<u8>(NEG_BYTE - 255);
+constx NEG_BYTE_HI: u8 = @static_cast<u8>(255 - NEG_BYTE);
+constx WRAPPED_LO: u8 = @static_cast<u8>(WRAPPED - 44);
+constx WRAPPED_HI: u8 = @static_cast<u8>(44 - WRAPPED);
+constx BACK_LO: u8 = @static_cast<u8>(BACK - 1.0);
+constx BACK_HI: u8 = @static_cast<u8>(1.0 - BACK);
+constx WIDE_LO: u8 = @static_cast<u8>(WIDE - 7.0);
+constx WIDE_HI: u8 = @static_cast<u8>(7.0 - WIDE);

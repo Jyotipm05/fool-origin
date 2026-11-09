@@ -129,7 +129,7 @@ SymbolTablePass0::SymbolTablePass0(TargetConfig target, DiagnosticEngine& diag)
     : m_target(std::move(target)), m_diag(diag) {}
 
 void SymbolTablePass0::define_parameters(const std::vector<ModuleParam>& params, const ConstTable& overrides) {
-    ConstEvaluator evaluator(m_definitions, m_diag);
+    ConstEvaluator evaluator(m_definitions, m_diag, m_target.m_pointer_width);
     for (const ModuleParam& param : params) {
         auto override_it = overrides.find(param.m_name);
         if (override_it != overrides.end()) {
@@ -192,7 +192,7 @@ bool SymbolTablePass0::evaluate_target_attributes(const DeclNode* decl) {
 }
 
 bool SymbolTablePass0::select_branch_conditions(const std::vector<ExprNode*>& conditions, size_t& chosen) {
-    ConstEvaluator evaluator(m_definitions, m_diag);
+    ConstEvaluator evaluator(m_definitions, m_diag, m_target.m_pointer_width);
     for (size_t i = 0; i < conditions.size(); ++i) {
         if (conditions[i] == nullptr) { // @else
             chosen = i;
@@ -277,7 +277,7 @@ void SymbolTablePass0::register_declaration(DeclNode* decl) {
             if (same && var->m_kind == BindingKind::Constx && var->m_initializer != nullptr) {
                 DiagnosticEngine scratch;
                 scratch.set_echo(false);
-                ConstEvaluator evaluator(m_definitions, scratch);
+                ConstEvaluator evaluator(m_definitions, scratch, m_target.m_pointer_width);
                 auto value = evaluator.evaluate(var->m_initializer);
                 auto previous = m_definitions.find(var->m_name);
                 same = value.has_value() && previous != m_definitions.end() &&
@@ -290,7 +290,7 @@ void SymbolTablePass0::register_declaration(DeclNode* decl) {
         }
         m_globals.emplace(var->m_name, var);
         if (var->m_kind == BindingKind::Constx && var->m_initializer != nullptr) {
-            ConstEvaluator evaluator(m_definitions, m_diag);
+            ConstEvaluator evaluator(m_definitions, m_diag, m_target.m_pointer_width);
             if (auto value = evaluator.evaluate(var->m_initializer)) m_definitions[var->m_name] = *value;
         }
     }

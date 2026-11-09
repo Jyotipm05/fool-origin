@@ -118,12 +118,14 @@ class ConstEvaluator {
     // 1. Member variables FIRST on top with 'm_' prefix
     const ConstTable& m_table;
     DiagnosticEngine& m_diag;
+    unsigned m_pointer_width{64}; ///< Width of usize/isize on the target, for constant casts
 
 public:
     // 2. Constructors and Destructors in the MIDDLE
-    ConstEvaluator(const ConstTable& table, DiagnosticEngine& diag) : m_table(table), m_diag(diag) {}
+    ConstEvaluator(const ConstTable& table, DiagnosticEngine& diag, unsigned pointer_width = 64)
+        : m_table(table), m_diag(diag), m_pointer_width(pointer_width) {}
     /// The evaluator only keeps a reference; binding it to a temporary would leave it dangling.
-    ConstEvaluator(const ConstTable&& table, DiagnosticEngine& diag) = delete;
+    ConstEvaluator(const ConstTable&& table, DiagnosticEngine& diag, unsigned pointer_width = 64) = delete;
 
     // 3. Member functions LAST at the bottom
     /// Returns nullopt (after reporting, unless `report` is false) if `expr` is not a constant expression.
@@ -132,6 +134,7 @@ public:
 private:
     [[nodiscard]] std::optional<ConstValue> eval_unary(const UnaryExpr* expr, bool report) const;
     [[nodiscard]] std::optional<ConstValue> eval_binary(const BinaryExpr* expr, bool report) const;
+    [[nodiscard]] std::optional<ConstValue> eval_cast(const CastExpr* expr, bool report) const;
     [[nodiscard]] std::optional<ConstValue> fail(const ExprNode* expr, bool report, std::string message) const;
 };
 
@@ -311,6 +314,29 @@ public:
 // =============================================================================================
 
 /**
+ * @struct StaticType
+ * @brief Lightweight static type used to validate casts. `Unknown` means the type could not be
+ * inferred (generics, calls into other modules, ...); checks that need it are skipped, never guessed.
+ */
+struct StaticType {
+    enum class Kind : uint8_t { Unknown, Int, Float, Bool, Void, Pointer, Reference, Named };
+
+    // 1. Member variables
+    Kind m_kind{Kind::Unknown};
+    SymbolID m_name{INVALID_SYMBOL_ID};     ///< Primitive or nominal type name
+    unsigned m_bits{0};                     ///< Int/Float width in bits; 0 for an untyped literal
+    bool m_signed{false};
+    bool m_literal{false};                  ///< Type of a literal: adapts to its context
+    bool m_const{false};                    ///< Pointer/Reference: the pointee is read-only
+    std::shared_ptr<StaticType> m_pointee;  ///< Pointer/Reference target
+
+    // 2. Member functions
+    [[nodiscard]] bool known() const { return m_kind != Kind::Unknown; }
+    [[nodiscard]] bool is_numeric() const { return m_kind == Kind::Int || m_kind == Kind::Float; }
+    [[nodiscard]] bool is_view() const { return m_kind == Kind::Pointer || m_kind == Kind::Reference; }
+};
+
+/**
  * @struct SymbolBinding
  * @brief Tracks variable binding mutability, type shape, and destructive move state in local scopes.
  */
@@ -324,6 +350,7 @@ struct SymbolBinding {
     bool m_is_view{false};        ///< Reference or pointer: cannot be moved out of
     bool m_is_moved{false};       ///< Tracked for destructive move invalidation
     std::optional<ConstValue> m_constant; ///< Value of a local `constx`; scoped (and shadowed) with the binding
+    StaticType m_static_type;     ///< Inferred or declared type, for cast validation
     SourceSpan m_span;
 
     // 2. Constructors in the MIDDLE
@@ -345,6 +372,7 @@ class TypeCheckerPass2 {
     const ClassDeclNode* m_current_owner{nullptr};
     int m_loop_depth{0};
     bool m_strict_names{false};
+    bool m_warn_shadow{false};
 
 public:
     // 2. Constructors in the MIDDLE
@@ -354,6 +382,8 @@ public:
     // 3. Member functions LAST at the bottom
     /// When enabled, uses of names that resolve nowhere are errors (requires every sibling file and import to be loaded).
     void set_strict_names(bool strict) { m_strict_names = strict; }
+    /// Opt-in `-Wshadow`: warn when a declaration hides a variable of an enclosing scope or a global.
+    void set_warn_shadow(bool enabled) { m_warn_shadow = enabled; }
     /// Checks every active declaration known to the Pass 0 table. Returns true if no errors were reported.
     bool check_module();
     bool check_function(const FunctionDeclNode* fn, const ClassDeclNode* owner);
@@ -365,8 +395,9 @@ private:
     SymbolBinding* lookup(SymbolID name);
     SymbolBinding* lookup_in_current_scope(SymbolID name);
     SymbolBinding* declare(SymbolBinding binding);
+    void warn_if_shadowing(const SymbolBinding& binding) const;
 
-    static SymbolBinding make_binding(SymbolID name, const TypeNode* type, BindingKind kind, const SourceSpan &span);
+    SymbolBinding make_binding(SymbolID name, const TypeNode* type, BindingKind kind, const SourceSpan &span);
 
     // declarations
     void check_declaration_consistency() const;
@@ -384,6 +415,14 @@ private:
     [[nodiscard]] const ConditionalBranch* select_branch(const ConditionalStmt* stmt, bool report) const;
     [[nodiscard]] bool is_generic_parameter(SymbolID name) const;
     [[nodiscard]] const FunctionDeclNode* resolve_callee(const CallExpr* call) const;
+
+    // Static types and named casts (TypeCheckerCasts.cpp)
+    [[nodiscard]] StaticType static_type_of(const TypeNode* node) const;
+    [[nodiscard]] StaticType infer_type(const ExprNode* expr);
+    [[nodiscard]] std::optional<uint64_t> type_size(const StaticType& type, unsigned depth = 0) const;
+    [[nodiscard]] std::optional<uint64_t> type_alignment(const StaticType& type, unsigned depth = 0) const;
+    [[nodiscard]] std::string describe(const StaticType& type) const;
+    void check_named_cast(const CastExpr* cast);
 
     // expressions
     void check_expression(const ExprNode* expr);
