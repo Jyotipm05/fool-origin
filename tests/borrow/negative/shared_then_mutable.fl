@@ -1,0 +1,14 @@
+module tests::borrow_shared_then_mutable;
+
+fn use2(a: const& i32, b: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    const r: const& i32 = &x;
+    // expect-error: because it is also borrowed as immutable
+    var m = &x;
+    use2(r, m);
+    return;
+}

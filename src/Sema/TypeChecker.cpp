@@ -9,6 +9,7 @@
 
 module;
 #include <ranges>
+#include <optional>
 
 #if defined(__MINGW64__) || defined(__GNUC__)
 #include <cstddef>
@@ -139,7 +140,14 @@ namespace fool {
 
     ConstTable TypeCheckerPass2::visible_constants() const {
         ConstTable table = m_pass0.definitions();
-        for (const auto &[name, value]: m_local_constants) table[name] = value;
+        // Walk the scopes outermost-first so that an inner declaration shadows an outer one: a local
+        // `constx` contributes its value, any other binding hides a constant of the same name.
+        for (const auto &scope: m_scopes) {
+            for (const SymbolBinding &binding: scope) {
+                if (binding.m_constant) table[binding.m_name] = *binding.m_constant;
+                else table.erase(binding.m_name);
+            }
+        }
         return table;
     }
 
@@ -421,7 +429,6 @@ namespace fool {
         m_current_fn = fn;
         m_current_owner = owner;
         m_loop_depth = 0;
-        m_local_constants.clear();
         m_scopes.clear();
         push_scope();
 
@@ -483,8 +490,11 @@ namespace fool {
         for (const StmtNode *stmt: stmts) {
             if (const auto *conditional = dynamic_cast<const ConditionalStmt *>(stmt)) {
                 // Compile-time @if: only the selected branch exists as far as later passes are concerned.
-                if (const ConditionalBranch *branch = select_branch(conditional, true))
+                if (const ConditionalBranch *branch = select_branch(conditional, true)) {
+                    push_scope(); // a branch body is a block of its own, like `if constexpr` in C++
                     check_statements(branch->m_body);
+                    pop_scope();
+                }
                 continue;
             }
             check_statement(stmt);
@@ -546,7 +556,7 @@ namespace fool {
             var.m_span = for_stmt->m_span;
             declare(var);
             ++m_loop_depth;
-            if (for_stmt->m_body != nullptr) check_statements(for_stmt->m_body->m_statements);
+            check_block_scoped(for_stmt->m_body); // the body is a block inside the loop-variable scope, like C++
             --m_loop_depth;
             pop_scope();
         } else if (dynamic_cast<const BreakStmt *>(stmt) != nullptr) {
@@ -554,7 +564,11 @@ namespace fool {
         } else if (dynamic_cast<const ContinueStmt *>(stmt) != nullptr) {
             if (m_loop_depth == 0) m_diag.error(stmt->m_span, "'continue' outside of a loop");
         } else if (const auto *conditional = dynamic_cast<const ConditionalStmt *>(stmt)) {
-            if (const ConditionalBranch *branch = select_branch(conditional, true)) check_statements(branch->m_body);
+            if (const ConditionalBranch *branch = select_branch(conditional, true)) {
+                push_scope();
+                check_statements(branch->m_body);
+                pop_scope();
+            }
         }
     }
 
@@ -563,11 +577,12 @@ namespace fool {
 
         const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
         const ConstEvaluator evaluator(constants, m_diag);
+        std::optional<ConstValue> constant;
         if (var->m_kind == BindingKind::Constx) {
             if (var->m_initializer != nullptr) {
                 if (const auto value = evaluator.evaluate(var->m_initializer)) {
                     check_const_fits_type(var->m_type, *value, var->m_span, "constant");
-                    m_local_constants[var->m_name] = *value;
+                    constant = *value;
                 }
             }
         } else if (var->m_type != nullptr && var->m_initializer != nullptr) {
@@ -591,6 +606,7 @@ namespace fool {
                 binding.m_is_view = cast->m_target != nullptr && cast->m_target->is_view();
             }
         }
+        binding.m_constant = constant;
         declare(binding);
     }
 

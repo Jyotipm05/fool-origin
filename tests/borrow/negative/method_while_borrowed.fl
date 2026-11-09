@@ -1,0 +1,26 @@
+// A `this &self` method call needs exclusive access to the object.
+module tests::borrow_method_while_borrowed;
+
+class Counter {
+    value: i32;
+
+    fn bump(this &self);
+}
+
+fn Counter::bump(this &self) {
+    self.value = self.value + 1;
+    return;
+}
+
+fn read(c: const& Counter) {
+    return;
+}
+
+fn run() {
+    var c = Counter { value: 0 };
+    const r: const& Counter = &c;
+    // expect-error: cannot borrow 'c' as mutable because it is also borrowed as immutable
+    c.bump();
+    read(r);
+    return;
+}

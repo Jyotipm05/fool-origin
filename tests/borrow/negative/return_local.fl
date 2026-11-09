@@ -1,0 +1,14 @@
+module tests::borrow_return_local;
+
+fn first() -> &i32 {
+    var v = 1;
+    // expect-error: does not live long enough
+    return &v;
+}
+
+fn second() -> &i32 {
+    var w = 2;
+    var r = &w;
+    // expect-error: borrows local variable 'w'
+    return r;
+}

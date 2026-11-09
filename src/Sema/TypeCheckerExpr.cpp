@@ -88,7 +88,6 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
             }
             return;
         }
-        if (m_local_constants.count(id->m_identifier) != 0) return;
         if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) && !is_generic_parameter(id->m_identifier)) {
             m_diag.error(expr->m_span, "use of undeclared identifier '" + name_of(id->m_identifier) + "'");
         }
@@ -214,10 +213,6 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
             } else {
                 binding->m_is_moved = false; // assignment re-initializes a moved-from variable
             }
-            return;
-        }
-        if (m_local_constants.count(name) != 0) {
-            m_diag.error(lhs->m_span, "cannot assign to constant '" + name_of(name) + "'");
             return;
         }
         if (const VarDeclNode* global = m_pass0.find_global(name)) {

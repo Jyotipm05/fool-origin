@@ -76,6 +76,37 @@ Fool eliminates the verbose `mut` keyword in favor of clean, predictable mutabil
 
 ---
 
+### 2b. Scopes & Shadowing
+
+Fool follows C++ block scoping. A `{ ... }` block, an `if`/`while` body, a `for` loop (loop variable plus body) and every
+branch of a compile-time `@if` open a new scope. A name declared in a nested scope **shadows** the same name from an
+enclosing scope until the end of its block; afterwards the outer name is visible again and was never modified:
+
+```fool
+fn run(count: i32) -> i32 {
+    var total = 1;
+    {
+        var total = 2;        // shadows the outer `total`
+        total = total + 1;    // changes the inner variable only
+    }
+    if (count > 0) {
+        var count = 5;        // shadows the parameter inside this block
+        total = total + count;
+    }
+    return total;             // the outer `total`
+}
+```
+
+- Redeclaring a name **in the same scope** is an error, including a parameter at the top level of the function body
+  (`redefinition of 'x' in this scope`), exactly as in C++.
+- Shadowing also applies to `constx`: a local that shadows a constant hides its compile-time value inside the block.
+- One deliberate difference from C++: a declaration's initializer is evaluated *before* the new name enters scope, so
+  `var total = total + 1;` in a nested block reads the outer `total` instead of the variable being declared.
+- The checker, the const evaluator and the borrow checker all use the same scoping, so a shadowing variable is never
+  confused with the one it hides.
+
+---
+
 ### 3. Explicit Receivers
 
 Methods in Fool do not rely on implicit, hidden `this` pointers. The receiver is explicitly declared as the first parameter:
@@ -252,8 +283,8 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 | Pass 1 module graph, import templates, cycle detection | Implemented |
 | Pass 2 checks listed above | Implemented (name/type resolution is structural, not a full type system) |
 | Expression type inference, generics instantiation | Not implemented |
-| Opt-in borrow checker (`--check-borrow`) | **Planned**, no flag exists yet |
-| BMI cache (`.flbmi`), HIR/MIR, code generation | **Planned** |
+| Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
+| BMI cache (`.flbmi`), HIR/MIR, code generation | **Planned** (`src/Module/BMICache.cpp` is an unfinished draft and is not built) |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
@@ -348,6 +379,7 @@ If CMake picks the wrong scanner for Clang, pass it explicitly, e.g. `-DCMAKE_CX
 foolc                                   # project mode over stdlib/ and examples/
 foolc --project -I stdlib -I examples   # explicit search roots
 foolc --graph                           # also print the module compilation order
+foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
 foolc examples/01_basics.fl             # parse + local checks for single files
 ```
@@ -356,11 +388,26 @@ Exit codes: `0` success, `1` diagnostics with errors (or failed expectations), `
 
 **Expect-error tests.** A file containing `// expect-error: <text>` comments is checked in test mode and passes only if exactly those errors are reported. A trailing comment applies to its own line; a comment on its own line applies to the next line. See `tests/negative/`.
 
+### Opt-in borrow checker
+
+`--check-borrow` runs after the type checker, on code that already type-checks. A borrow starts at
+`var r = &x;` (exclusive) or `const r: const& T = &x;` / `&x as const* T` (shared) and ends at the last use of `r`
+(non-lexical lifetimes; borrows declared outside a loop and used inside it live for the whole loop). Calls borrow
+temporarily: `f(&x)` and `x.method()` with a `this &self` receiver. Reported errors:
+
+- a second exclusive borrow, or a shared/exclusive overlap, of the same place (`x`, `x.field`; disjoint fields are fine)
+- reading or assigning a place while it is borrowed (assignment: by any borrow; reading: by an exclusive one)
+- aliasing arguments within one call, e.g. `swap(&x, &x)`
+- returning a reference to a local variable or to a local's borrow
+
+Limits: analysis is intra-procedural (no lifetimes across calls, no reborrow chains), and it is only as precise as the
+structural type information the checker has. Shadowed variables are tracked as separate variables.
+
 ### Running Tests with CTest
 
 ```bash
 ctest --test-dir build --output-on-failure
-ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative
+ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow
 ```
 
 ---

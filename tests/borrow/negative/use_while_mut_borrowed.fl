@@ -1,0 +1,14 @@
+module tests::borrow_use_while_mut_borrowed;
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var r = &x;
+    // expect-error: because it is mutably borrowed by 'r'
+    var y = x;
+    touch(r);
+    return;
+}

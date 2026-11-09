@@ -1,0 +1,14 @@
+// A shadowing local hides the constant only inside its own block; afterwards the constant is back.
+module tests::shadow_constx_scope;
+
+constx K: u8 = 100;
+
+fn run() {
+    {
+        var K: u8 = 0;
+        var inner: u8 = K + 200;
+    }
+    // expect-error: does not fit
+    var outer: u8 = K + 200;
+    return;
+}

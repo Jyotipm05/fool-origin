@@ -1,0 +1,43 @@
+// Nested scopes may shadow outer names (like C++ blocks); the inner name hides the outer one
+// until the end of its block, and the outer one is untouched afterwards.
+module tests::shadowing;
+
+constx LIMIT: u8 = 100;
+
+fn run(count: i32) -> i32 {
+    var total = 1;
+    {
+        var total = 2;
+        total = total + 1;
+    }
+    if (count > 0) {
+        var count = 5;
+        total = total + count;
+    }
+    var i = 0;
+    while (i < 2) {
+        var total = i;
+        i = i + 1;
+    }
+    for step in 0..3 {
+        var step = 7;
+        total = total + step;
+    }
+    // Branches of a compile-time @if are blocks of their own.
+    @if (def(MISSING)) {
+        var total = 7;
+    } @else {
+        var total = 8;
+        total = total + 1;
+    }
+    // The initializer still sees the outer variable of the same name.
+    {
+        var total = total + 1;
+    }
+    // A local that shadows a constx hides its compile-time value ...
+    {
+        var LIMIT: u8 = 0;
+        var small: u8 = LIMIT + 200;
+    }
+    return total;
+}

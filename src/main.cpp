@@ -33,6 +33,7 @@ import fool.lexer;
 import fool.ast;
 import fool.parser;
 import fool.sema;
+import fool.borrow;
 
 namespace {
 
@@ -45,6 +46,7 @@ struct Options {
     bool m_project{false};
     bool m_graph{false};
     bool m_quiet{false};
+    bool m_check_borrow{false};
 };
 
 void print_usage() {
@@ -58,6 +60,7 @@ void print_usage() {
         "  --project              check every module below the search roots as a unit\n"
         "  -I <dir>               add a module search root (project mode)\n"
         "  --graph                print the module compilation order (project mode)\n"
+        "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
         "  -q, --quiet            suppress the summary line\n"
         "  -h, --help             show this help\n"
         "\n"
@@ -96,7 +99,7 @@ bool read_file(const fs::path& path, std::string& out) {
 /// Lex, parse, prune and check one file on its own. Imports are not resolved in this mode, so
 /// checks that need symbols from other files are skipped rather than guessed.
 void check_single_file(const fs::path& path, const std::string& source, const fool::TargetConfig& target,
-                       fool::DiagnosticEngine& diag) {
+                       fool::DiagnosticEngine& diag, bool check_borrow) {
     diag.set_current_file(path.string());
     fool::Arena arena;
     fool::Lexer lexer(source, path.string(), diag);
@@ -110,7 +113,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     pass0.collect_declarations(module);
 
     fool::TypeCheckerPass2 checker(pass0, diag);
-    checker.check_module();
+    if (checker.check_module() && check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
 }
 
 struct Expectation {
@@ -189,7 +192,7 @@ int run_file_mode(const Options& options) {
         std::vector<Expectation> expectations = parse_expectations(source);
         fool::DiagnosticEngine diag;
         diag.set_echo(expectations.empty());
-        check_single_file(path, source, options.m_target, diag);
+        check_single_file(path, source, options.m_target, diag, options.m_check_borrow);
 
         if (expectations.empty()) {
             if (diag.has_errors()) ++failures;
@@ -212,7 +215,7 @@ int run_file_mode(const Options& options) {
 /// and runs the type checker over it with strict name resolution.
 std::unique_ptr<fool::SymbolTablePass0>
 check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrides, const fool::TargetConfig& target,
-                   fool::DiagnosticEngine& diag,
+                   fool::DiagnosticEngine& diag, bool check_borrow,
                    const std::unordered_map<fool::SymbolID, const fool::SymbolTablePass0*>& built) {
     auto table = std::make_unique<fool::SymbolTablePass0>(target, diag);
     table->define_parameters(node.m_parameters, overrides);
@@ -225,7 +228,7 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
     }
     fool::TypeCheckerPass2 checker(*table, diag);
     checker.set_strict_names(true);
-    checker.check_module();
+    if (checker.check_module() && check_borrow) fool::BorrowCheckerPass(*table, diag).check_module();
     return table;
 }
 
@@ -262,7 +265,7 @@ int run_project_mode(const Options& options) {
     size_t instantiations = 0;
     for (fool::SymbolID id : graph.get_compilation_order()) {
         const fool::ModuleNode* node = graph.get_module(id);
-        owned.push_back(check_module_group(*node, {}, options.m_target, diag, built));
+        owned.push_back(check_module_group(*node, {}, options.m_target, diag, options.m_check_borrow, built));
         built[id] = owned.back().get();
 
         // Each distinct set of import template arguments is checked as its own instantiation, so
@@ -270,7 +273,7 @@ int run_project_mode(const Options& options) {
         for (const fool::ModuleInstantiation& inst : node->m_instantiations) {
             ++instantiations;
             size_t before = diag.error_count();
-            check_module_group(*node, inst.m_overrides, options.m_target, diag, built);
+            check_module_group(*node, inst.m_overrides, options.m_target, diag, options.m_check_borrow, built);
             if (diag.error_count() != before) std::cerr << "note: errors above occurred in instantiation '" << inst.m_key << "'\n";
         }
     }
@@ -303,6 +306,8 @@ int main(const int argc, char** argv) {
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;
+        } else if (arg == "--check-borrow") {
+            options.m_check_borrow = true;
         } else if (arg == "-q" || arg == "--quiet") {
             options.m_quiet = true;
         } else if (!arg.empty() && arg[0] == '-') {

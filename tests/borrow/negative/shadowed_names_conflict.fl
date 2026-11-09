@@ -1,0 +1,28 @@
+module tests::borrow_shadowed_names_neg;
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var a = 1;
+    var r = &x;
+    {
+        var x = 2;
+        x = 3;       // inner x: fine
+    }
+    // expect-error: cannot assign to 'x' because it is borrowed by 'r'
+    x = 4;
+    touch(r);
+
+    var s = &a;
+    {
+        var s = &x;
+        touch(s);
+    }
+    // expect-error: cannot assign to 'a' because it is borrowed by 's'
+    a = 5;
+    touch(s);
+    return;
+}

@@ -323,6 +323,7 @@ struct SymbolBinding {
     bool m_is_pointer{false};
     bool m_is_view{false};        ///< Reference or pointer: cannot be moved out of
     bool m_is_moved{false};       ///< Tracked for destructive move invalidation
+    std::optional<ConstValue> m_constant; ///< Value of a local `constx`; scoped (and shadowed) with the binding
     SourceSpan m_span;
 
     // 2. Constructors in the MIDDLE
@@ -340,7 +341,6 @@ class TypeCheckerPass2 {
     SymbolTablePass0& m_pass0;
     DiagnosticEngine& m_diag;
     std::vector<std::vector<SymbolBinding>> m_scopes;
-    ConstTable m_local_constants;
     const FunctionDeclNode* m_current_fn{nullptr};
     const ClassDeclNode* m_current_owner{nullptr};
     int m_loop_depth{0};

@@ -31,6 +31,7 @@ add_executable(foolc
         src/Sema/ModuleGraph.cpp
         src/Sema/TypeChecker.cpp
         src/Sema/TypeCheckerExpr.cpp
+        src/Sema/BorrowChecker.cpp
 )
 
 # C++23 Module Interfaces directly inside src/
@@ -45,6 +46,7 @@ target_sources(foolc
         src/AST/AST.ixx
         src/Parser/Parser.ixx
         src/Sema/SymbolTable.ixx
+        src/Sema/BorrowChecker.ixx
 )
 
 if (MSVC)
@@ -132,4 +134,20 @@ if (BUILD_TESTING)
                  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
         set_tests_properties("foolc_positive_${POSITIVE_NAME}" PROPERTIES LABELS "positive")
     endforeach()
+    # 6. Borrow checker (opt-in): fixtures run with --check-borrow.
+    file(GLOB_RECURSE FOOL_BORROW_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/tests/borrow/*.fl")
+    foreach(BORROW_FILE ${FOOL_BORROW_FILES})
+        get_filename_component(BORROW_NAME "${BORROW_FILE}" NAME_WE)
+        add_test(NAME "foolc_borrow_${BORROW_NAME}"
+                 COMMAND foolc -q --check-borrow "${BORROW_FILE}"
+                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+        set_tests_properties("foolc_borrow_${BORROW_NAME}" PROPERTIES LABELS "borrow")
+    endforeach()
+
+    # 7. The whole workspace must also be clean under the borrow checker.
+    add_test(NAME foolc_project_check_borrow
+             COMMAND foolc --project --check-borrow -I stdlib -I examples
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_project_check_borrow PROPERTIES LABELS "project;borrow")
 endif()

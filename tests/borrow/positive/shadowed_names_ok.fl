@@ -1,0 +1,20 @@
+// A variable that shadows another one is tracked separately by the borrow checker.
+module tests::borrow_shadowed_names;
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var r = &x;
+    {
+        var x = 5;   // a different variable: assigning it does not touch the borrowed one
+        x = 6;
+        var r = &x;  // a different borrower, ending with this block
+        touch(r);
+    }
+    touch(r);
+    x = 2;
+    return;
+}

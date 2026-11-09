@@ -1,0 +1,14 @@
+module tests::borrow_assign_while_borrowed;
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var r = &x;
+    // expect-error: cannot assign to 'x' because it is borrowed by 'r'
+    x = 5;
+    touch(r);
+    return;
+}

@@ -1,0 +1,59 @@
+// Borrow patterns that must be accepted (non-lexical lifetimes, disjoint fields, shared readers).
+module tests::borrow_valid;
+
+class Pair {
+    left: i32;
+    right: i32;
+
+    fn bump(this &self);
+}
+
+fn Pair::bump(this &self) {
+    self.left = self.left + 1;
+    return;
+}
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn read2(a: const& i32, b: const& i32) {
+    return;
+}
+
+fn two_fields(a: &i32, b: &i32) {
+    return;
+}
+
+fn pick(p: &Pair) -> &i32 {
+    return &p.left;
+}
+
+fn run() -> i32 {
+    var x = 1;
+
+    // The borrow ends at its last use, so x may be assigned afterwards.
+    var r = &x;
+    touch(r);
+    x = 2;
+
+    // Any number of shared borrows may coexist.
+    const s1: const& i32 = &x;
+    const s2: const& i32 = &x;
+    read2(s1, s2);
+
+    // Disjoint fields can be borrowed mutably at the same time.
+    var p = Pair { left: 1, right: 2 };
+    two_fields(&p.left, &p.right);
+    p.bump();
+
+    // Borrows created inside a loop end with the iteration.
+    var i = 0;
+    while (i < 3) {
+        var t = &x;
+        touch(t);
+        x = x + 1;
+        i = i + 1;
+    }
+    return x;
+}

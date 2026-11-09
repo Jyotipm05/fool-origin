@@ -1,0 +1,17 @@
+// Aliasing XOR mutability also applies between the arguments of one call.
+module tests::borrow_call_aliasing;
+
+fn swap(a: &i32, b: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var y = 2;
+    swap(&x, &y);
+    // expect-error: as mutable more than once
+    swap(&x, &x);
+    // expect-error: because it is mutably borrowed in this call
+    swap(&x, &y as &i32 + x);
+    return;
+}

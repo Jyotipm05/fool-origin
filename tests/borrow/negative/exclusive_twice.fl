@@ -1,0 +1,15 @@
+// Two live exclusive borrows of the same variable.
+module tests::borrow_exclusive_twice;
+
+fn use2(a: &i32, b: &i32) {
+    return;
+}
+
+fn run() {
+    var x = 1;
+    var a = &x;
+    // expect-error: as mutable more than once
+    var b = &x;
+    use2(a, b);
+    return;
+}
