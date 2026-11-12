@@ -115,3 +115,4 @@ http-client.private.env.json
 # foolc build outputs
 build-*/
 .cache/
+.fool_cache/

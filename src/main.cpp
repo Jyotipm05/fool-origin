@@ -35,6 +35,7 @@ import fool.ast;
 import fool.parser;
 import fool.sema;
 import fool.borrow;
+import fool.bmi;
 
 namespace {
 
@@ -50,7 +51,23 @@ struct Options {
     bool m_check_borrow{false};
     bool m_warn_shadow{false};
     bool m_werror{false};
+    bool m_use_cache{false};
+    fs::path m_cache_dir;
+    bool m_bmi_roundtrip{false};
+    bool m_bmi_selftest{false};
+    /// Parse entry point shared by every mode; a default-constructed manager simply parses.
+    std::shared_ptr<fool::BMICacheManager> m_cache{std::make_shared<fool::BMICacheManager>()};
 };
+
+void print_cache_stats(const Options& options) {
+    if (options.m_quiet || !options.m_cache->uses_disk()) return;
+    const fool::BMIStats& stats = options.m_cache->stats();
+    std::cout << "foolc: bmi cache " << options.m_cache->directory().string() << ": " << stats.m_hits << " hit(s), "
+              << stats.m_misses << " miss(es), " << stats.m_stores << " stored";
+    if (stats.m_rejected != 0) std::cout << ", " << stats.m_rejected << " rejected";
+    if (stats.m_store_failures != 0) std::cout << ", " << stats.m_store_failures << " not stored";
+    std::cout << "\n";
+}
 
 void print_usage() {
     std::cout <<
@@ -66,6 +83,11 @@ void print_usage() {
         "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
         "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
         "  -Werror                treat warnings as errors\n"
+        "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
+        "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
+        "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
+        "  --bmi-selftest         run the built-in cache checks (SHA-256, codec, corruption, disk); extra\n"
+        "                         files given on the command line are used as codec samples\n"
         "  -q, --quiet            suppress the summary line\n"
         "  -h, --help             show this help\n"
         "\n"
@@ -107,9 +129,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
                        fool::DiagnosticEngine& diag, const Options& options) {
     diag.set_current_file(path.string());
     fool::Arena arena;
-    fool::Lexer lexer(source, path.string(), diag);
-    fool::Parser parser(lexer.tokenize_all(), arena, diag);
-    fool::ModuleAST* module = parser.parse_module();
+    fool::ModuleAST* module = options.m_cache->parse_cached(source, path, target.to_string(), arena, diag);
     fool::assign_source_file(module, path.string());
     if (diag.has_errors()) return; // do not run semantic checks on a broken tree
 
@@ -230,6 +250,7 @@ int run_file_mode(const Options& options) {
         std::cout << "foolc: checked " << checked << " file(s) for " << options.m_target.to_string() << ", "
                   << failures << " failed\n";
     }
+    print_cache_stats(options);
     return failures == 0 ? 0 : 1;
 }
 
@@ -264,6 +285,7 @@ int run_project_mode(const Options& options) {
     fool::DiagnosticEngine diag;
     fool::ModuleGraphPass1 graph(arena, diag, options.m_target);
     for (const fs::path& root : options.m_roots) graph.add_search_path(root);
+    graph.set_cache(options.m_cache.get());
 
     graph.index_search_paths();
     bool graph_ok = !diag.has_errors();
@@ -311,6 +333,7 @@ int run_project_mode(const Options& options) {
                   << " instantiation(s)), " << diag.error_count() << " error(s), " << diag.warning_count()
                   << " warning(s)\n";
     }
+    print_cache_stats(options);
     return (diag.has_errors() || (options.m_werror && diag.warning_count() > 0)) ? 1 : 0;
 }
 
@@ -338,6 +361,15 @@ int main(const int argc, char** argv) {
             options.m_warn_shadow = true;
         } else if (arg == "-Werror") {
             options.m_werror = true;
+        } else if (arg == "--cache") {
+            options.m_use_cache = true;
+        } else if (arg == "--cache-dir" && i + 1 < argc) {
+            options.m_use_cache = true;
+            options.m_cache_dir = argv[++i];
+        } else if (arg == "--bmi-roundtrip") {
+            options.m_bmi_roundtrip = true;
+        } else if (arg == "--bmi-selftest") {
+            options.m_bmi_selftest = true;
         } else if (arg == "--check-borrow") {
             options.m_check_borrow = true;
         } else if (arg == "-q" || arg == "--quiet") {
@@ -348,6 +380,14 @@ int main(const int argc, char** argv) {
         } else {
             options.m_files.emplace_back(arg);
         }
+    }
+
+    if (options.m_bmi_selftest) return fool::run_bmi_selftest(std::cout, options.m_files) ? 0 : 1;
+
+    if (options.m_use_cache || options.m_bmi_roundtrip) {
+        fs::path dir;
+        if (options.m_use_cache) dir = options.m_cache_dir.empty() ? fool::BMICacheManager::default_directory() : options.m_cache_dir;
+        options.m_cache = std::make_shared<fool::BMICacheManager>(dir, options.m_bmi_roundtrip);
     }
 
     if (options.m_files.empty()) options.m_project = true; // default: check the whole workspace

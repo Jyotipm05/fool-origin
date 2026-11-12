@@ -32,6 +32,7 @@ import fool.common;
 import fool.diagnostics;
 import fool.lexer;
 import fool.ast;
+import fool.bmi;
 
 export namespace fool {
 
@@ -285,6 +286,7 @@ class ModuleGraphPass1 {
     std::map<std::string, ModuleNode> m_modules;   ///< Ordered by name for deterministic output
     std::vector<SymbolID> m_topological_order;
     size_t m_indexed_files{0};
+    BMICacheManager* m_cache{nullptr};   ///< optional `.flbmi` cache used instead of re-parsing unchanged files
 
 public:
     // 2. Constructors and Destructors in the MIDDLE
@@ -293,6 +295,8 @@ public:
 
     // 3. Member functions LAST at the bottom
     void add_search_path(const std::filesystem::path& path);
+    /// Parses files through `cache` (nullptr: always parse). The cache must outlive the graph.
+    void set_cache(BMICacheManager* cache) { m_cache = cache; }
     /// Parses every source file below the search paths that applies to the target.
     void index_search_paths();
     /// Parses one file and registers it under every module section it declares.

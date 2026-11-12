@@ -33,6 +33,10 @@ add_executable(foolc
         src/Sema/TypeCheckerExpr.cpp
         src/Sema/TypeCheckerCasts.cpp
         src/Sema/BorrowChecker.cpp
+        src/Module/Sha256.cpp
+        src/Module/BMICodec.cpp
+        src/Module/BMICache.cpp
+        src/Module/BMISelfTest.cpp
 )
 
 # C++23 Module Interfaces directly inside src/
@@ -48,6 +52,7 @@ target_sources(foolc
         src/Parser/Parser.ixx
         src/Sema/SymbolTable.ixx
         src/Sema/BorrowChecker.ixx
+        src/Module/BMICache.ixx
 )
 
 if (MSVC)
@@ -55,6 +60,23 @@ if (MSVC)
 else()
     target_compile_options(foolc PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# .flbmi cache entries are keyed on a fingerprint of everything that decides what the parser produces
+# (lexer, parser, AST, arena, codec), so a compiler built from different frontend sources never reuses
+# an entry written by another one. Editing one of these files re-runs CMake and refreshes the hash.
+set(FOOL_FRONTEND_SOURCES
+        src/Common/Common.ixx src/Lexer/Lexer.ixx src/Lexer/Lexer.cpp src/AST/AST.ixx
+        src/Parser/Parser.ixx src/Parser/Parser.cpp src/Parser/ParserDecl.cpp
+        src/Module/BMICache.ixx src/Module/BMICodec.cpp)
+set(FOOL_FRONTEND_HASHES "")
+foreach(FRONTEND_SOURCE ${FOOL_FRONTEND_SOURCES})
+    file(SHA256 "${CMAKE_SOURCE_DIR}/${FRONTEND_SOURCE}" FRONTEND_SOURCE_HASH)
+    string(APPEND FOOL_FRONTEND_HASHES "${FRONTEND_SOURCE}:${FRONTEND_SOURCE_HASH};")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/${FRONTEND_SOURCE}")
+endforeach()
+string(SHA256 FOOL_FRONTEND_FINGERPRINT "${FOOL_FRONTEND_HASHES}")
+set_source_files_properties(src/Module/BMICache.cpp PROPERTIES
+        COMPILE_DEFINITIONS "FOOL_FRONTEND_FINGERPRINT=\"${FOOL_FRONTEND_FINGERPRINT}\"")
 
 # ==============================================================================
 # CTest Integration
@@ -169,4 +191,41 @@ if (BUILD_TESTING)
              COMMAND foolc -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/positive/shadowing.fl"
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(foolc_warn_werror_fails PROPERTIES LABELS "warn" WILL_FAIL TRUE)
+
+    # 9. .flbmi cache. The self-test checks SHA-256, the key, the codec (round trip, truncation and
+    #    bit flips) and the on-disk behaviour. The round-trip runs repeat the groups above on the tree
+    #    decoded from the encoded file, which is exactly what a cache hit hands to the type checker.
+    #    cache_cycle.cmake drives a cold/warm/edited/damaged sequence through the real binary.
+    add_test(NAME foolc_bmi_selftest
+             COMMAND foolc --bmi-selftest ${FOOL_SOURCE_FILES} ${FOOL_POSITIVE_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_sources
+             COMMAND foolc -q --bmi-roundtrip ${FOOL_SOURCE_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_positive
+             COMMAND foolc -q --bmi-roundtrip ${FOOL_POSITIVE_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_negative
+             COMMAND foolc -q --bmi-roundtrip ${FOOL_NEGATIVE_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_borrow
+             COMMAND foolc -q --bmi-roundtrip --check-borrow ${FOOL_BORROW_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_warn
+             COMMAND foolc -q --bmi-roundtrip --warn-shadow ${FOOL_WARN_FILES}
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    add_test(NAME foolc_bmi_roundtrip_project
+             COMMAND foolc --project --bmi-roundtrip --check-borrow --warn-shadow -I stdlib -I examples
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    string(REPLACE ";" "|" FOOL_NEGATIVE_FILE_ARG "${FOOL_NEGATIVE_FILES}")
+    add_test(NAME foolc_bmi_cache_cycle
+             COMMAND ${CMAKE_COMMAND}
+                     -DFOOLC=$<TARGET_FILE:foolc>
+                     -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+                     -DWORK_DIR=${CMAKE_BINARY_DIR}/bmi-cache-test
+                     "-DNEGATIVE_FILES_ARG=${FOOL_NEGATIVE_FILE_ARG}"
+                     -P ${CMAKE_SOURCE_DIR}/tests/cache/cache_cycle.cmake)
+    set_tests_properties(foolc_bmi_selftest foolc_bmi_roundtrip_sources foolc_bmi_roundtrip_positive
+                         foolc_bmi_roundtrip_negative foolc_bmi_roundtrip_borrow foolc_bmi_roundtrip_warn
+                         foolc_bmi_roundtrip_project foolc_bmi_cache_cycle PROPERTIES LABELS "bmi")
 endif()

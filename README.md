@@ -33,7 +33,7 @@ Fool replaces legacy C/C++ header files and monolithic source translation units 
 
 | Extension | Role | Contents | Invariants |
 | :--- | :--- | :--- | :--- |
-| **`.fo`** | **Interface Blueprint** | Declarations, nominal `ruleset` capability bounds, `class` memory layouts, `blueprint` templates, and public function signatures. | **Zero executable bodies**. Compiled into Binary Module Interfaces (`.flbmi`). |
+| **`.fo`** | **Interface Blueprint** | Declarations, nominal `ruleset` capability bounds, `class` memory layouts, `blueprint` templates, and public function signatures. | **Zero executable bodies**. Cached as Binary Module Interfaces (`.flbmi`, see below). |
 | **`.fl`** | **Implementation Unit** | Pure Fool algorithmic logic, method bodies, and state machine step transitions. | Declares `module <name>;`. **Never self-imports its companion `.fo`**. External `#import` allowed. |
 | **`.fex`** | **External / Platform Overlay** | Foreign ABI bindings (`@extern("C")`, `@extern("llvm")`), kernel syscalls, and target-specific overrides. | Gated by `@target(os = "...", arch = "...")`. Merged in Pass 0. |
 
@@ -267,7 +267,8 @@ fool-origin/
 │   ├── Lexer/                 # Zero-copy tokenizer
 │   ├── AST/                   # Arena-allocated AST nodes & statements
 │   ├── Parser/                # Pratt & recursive descent parser with error recovery
-│   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker
+│   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker, borrow checker
+│   ├── Module/                # `.flbmi` cache: SHA-256, binary parse-tree codec, on-disk cache manager
 │   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
 ├── stdlib/                    # Standard Library (52 files across 7 subsystems)
 │   ├── core/                  # memory, span, atomic, rulesets
@@ -277,7 +278,7 @@ fool-origin/
 │   ├── net/                   # tcp sockets
 │   ├── math/                  # scalar and SIMD vector math
 │   └── sys/                   # process and environment
-├── tests/                     # positive/negative regression tests and project-mode fixtures
+├── tests/                     # positive/negative/borrow/warn regression tests, project and cache fixtures
 ├── CMakeLists.txt             # Modern CMake build configuration (Ninja + C++23 modules)
 ├── CMakePresets.json          # `cmake --preset default`
 └── fool-vscode-0.1.0.vsix     # Packaged VSIX ready for installation
@@ -316,7 +317,8 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 | Pass 2 checks listed above, named casts | Implemented (name/type resolution is structural, not a full type system) |
 | Expression type inference, generics instantiation | Not implemented |
 | Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
-| BMI cache (`.flbmi`), HIR/MIR, code generation | **Planned** (`src/Module/BMICache.cpp` is an unfinished draft and is not built) |
+| BMI cache (`.flbmi`): SHA-256 keyed parse-tree cache (`--cache`) | Implemented (see below) |
+| HIR/MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
@@ -413,6 +415,7 @@ foolc --project -I stdlib -I examples   # explicit search roots
 foolc --graph                           # also print the module compilation order
 foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
+foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
 foolc examples/01_basics.fl             # parse + local checks for single files
 ```
@@ -420,6 +423,34 @@ foolc examples/01_basics.fl             # parse + local checks for single files
 Exit codes: `0` success, `1` diagnostics with errors (or failed expectations), `2` usage error.
 
 **Expect-error tests.** A file containing `// expect-error: <text>` comments is checked in test mode and passes only if exactly those errors are reported. A trailing comment applies to its own line; a comment on its own line applies to the next line. See `tests/negative/`.
+
+### The `.flbmi` cache
+
+`foolc --cache` (or `--cache-dir <dir>`) stores the parse tree of every file it reads as a Binary Module Interface and
+loads it again on the next run instead of lexing and parsing the file. It is off by default; the default directory is
+`.fool_cache/bmi`, and deleting it is always safe.
+
+```
+key = SHA-256( format version || frontend fingerprint || source text || import template args || target triple )
+```
+
+- The key is derived from the file's *text*, so an unchanged file is found without parsing it. Whitespace or comment
+  edits make a new entry; the old one is simply never read again.
+- The *frontend fingerprint* is a hash of the lexer, parser, AST and codec sources computed by CMake, so a compiler that
+  parses differently never reuses an entry written by another build.
+- Template arguments are part of the key. Import templates are resolved after parsing, so today every instantiation shares
+  the base entry (empty argument string); instantiated interfaces can get their own entries without a format change.
+- An entry is `magic | version | key | SHA-256 of the payload | size | payload`. The payload holds a string table and
+  the whole tree (declarations, signatures, bodies, spans), so a hit is indistinguishable from a fresh parse, including
+  the line numbers in diagnostics. Anything that does not verify (wrong magic, version, key, size, hash, or a payload
+  that does not decode within bounds) is counted as *rejected*, parsed normally and overwritten.
+- Entries are written atomically (temporary file + rename), and only for files that parsed with no diagnostics, so a cache
+  hit can never hide an error or warning. An unwritable cache directory costs nothing but the cache.
+- `--bmi-roundtrip` runs a file on the tree decoded from its own encoding (what a hit would produce); `--bmi-selftest`
+  checks SHA-256 against the FIPS test vectors, the key, the codec and the on-disk behaviour. Both are used by the test suite.
+
+Caveat for compiler developers: when you add a field to an AST node, add it to `src/Module/BMICodec.cpp` as well and bump
+`BMI_FORMAT_VERSION`. The round-trip test compares encodings, so a field the codec never writes is not caught by it.
 
 ### Opt-in borrow checker
 
@@ -440,7 +471,7 @@ structural type information the checker has. Shadowed variables are tracked as s
 
 ```bash
 ctest --test-dir build --output-on-failure
-ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow
+ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow, warn, bmi
 ```
 
 ---

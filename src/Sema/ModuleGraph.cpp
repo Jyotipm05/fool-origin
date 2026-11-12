@@ -97,9 +97,14 @@ void ModuleGraphPass1::add_source_file(const std::filesystem::path& path) {
     std::string source = buffer.str();
 
     m_diag.set_current_file(path.string());
-    Lexer lexer(source, path.string(), m_diag);
-    Parser parser(lexer.tokenize_all(), m_arena, m_diag);
-    ModuleAST* ast = parser.parse_module();
+    ModuleAST* ast = nullptr;
+    if (m_cache != nullptr) {
+        ast = m_cache->parse_cached(source, path, m_target.to_string(), m_arena, m_diag);
+    } else {
+        Lexer lexer(source, path.string(), m_diag);
+        Parser parser(lexer.tokenize_all(), m_arena, m_diag);
+        ast = parser.parse_module();
+    }
     ++m_indexed_files;
     assign_source_file(ast, path.string());
 
