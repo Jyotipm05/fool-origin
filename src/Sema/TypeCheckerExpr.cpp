@@ -260,14 +260,23 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
 // Calls
 // ---------------------------------------------------------------------------------------------
 
-void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name) {
+const ResolvedCall* TypeCheckerPass2::find_resolved_call(const CallExpr* call) const {
+    auto it = m_resolved_call_index.find(call);
+    return it == m_resolved_call_index.end() ? nullptr : &m_resolved_calls[it->second];
+}
+
+void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name,
+                                      const ExprNode* receiver) {
     const auto& params = fn->m_params;
     std::vector<bool> filled(params.size(), false);
+    std::vector<size_t> source_of(params.size(), ResolvedArgument::NO_SOURCE);
+    const size_t errors_before = m_diag.error_count();
     bool seen_label = false;
     size_t next_positional = 0;
     bool reported_too_many = false;
 
-    for (const CallArg& arg : call->m_args) {
+    for (size_t arg_index = 0; arg_index < call->m_args.size(); ++arg_index) {
+        const CallArg& arg = call->m_args[arg_index];
         if (arg.m_label == INVALID_SYMBOL_ID) {
             if (seen_label) {
                 m_diag.error(arg.m_span, "positional argument cannot follow a named argument in call to '" +
@@ -282,6 +291,7 @@ void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr
                 }
                 continue;
             }
+            source_of[next_positional] = arg_index;
             filled[next_positional++] = true;
         } else {
             seen_label = true;
@@ -295,6 +305,7 @@ void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr
                 m_diag.error(arg.m_span, "multiple values for parameter '" + name_of(arg.m_label) + "' in call to '" +
                                          std::string(display_name) + "'");
             } else {
+                source_of[index] = arg_index;
                 filled[index] = true;
             }
         }
@@ -306,6 +317,27 @@ void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr
                                        "' in call to '" + std::string(display_name) + "'");
         }
     }
+
+    // Only a call that bound cleanly has a canonical form; erroneous calls never reach later stages.
+    if (m_diag.error_count() != errors_before || m_resolved_call_index.count(call) != 0) return;
+    ResolvedCall resolved;
+    resolved.m_call = call;
+    resolved.m_callee = fn;
+    resolved.m_display = std::string(display_name);
+    resolved.m_receiver = receiver;
+    for (size_t i = 0; i < params.size(); ++i) {
+        ResolvedArgument slot;
+        if (filled[i]) {
+            slot.m_source_index = source_of[i];
+            slot.m_value = call->m_args[source_of[i]].m_expr;
+        } else {
+            slot.m_is_default = true;
+            slot.m_value = params[i].m_default_value;
+        }
+        resolved.m_slots.push_back(slot);
+    }
+    m_resolved_call_index.emplace(call, m_resolved_calls.size());
+    m_resolved_calls.push_back(std::move(resolved));
 }
 
 void TypeCheckerPass2::check_call(const CallExpr* call) {
@@ -313,6 +345,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     std::string display;
     const FunctionDeclNode* consuming_method = nullptr;
     SymbolID receiver_name = INVALID_SYMBOL_ID;
+    const ExprNode* receiver_object = nullptr;
 
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(call->m_callee)) {
         display = name_of(id->m_identifier);
@@ -350,6 +383,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
                 m_diag.error(member->m_span, "'" + name_of(cls->m_name) + "' has no method '" + display + "'");
             } else if (method != nullptr) {
                 target = method;
+                receiver_object = member->m_object;
                 display = name_of(cls->m_name) + "::" + display;
                 std::string binding_name = name_of(binding->m_name);
                 ReceiverKind kind = method->m_receiver.m_kind;
@@ -376,7 +410,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     }
 
     for (const CallArg& arg : call->m_args) check_expression(arg.m_expr);
-    if (target != nullptr) bind_arguments(target, call, display);
+    if (target != nullptr) bind_arguments(target, call, display, receiver_object);
 
     // `this self` consumes the receiver: later uses are errors until it is assigned again.
     if (consuming_method != nullptr) {

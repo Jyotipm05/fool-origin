@@ -1,0 +1,11 @@
+call render_box (35:5): x=arg0 y=arg1 scale=arg2 width=arg3 height=arg4 depth=arg5
+call render_box (36:5): x=arg0 y=arg1 scale=default width=arg2 height=arg3 depth=default
+call render_box (37:5): x=arg3 y=arg2 scale=default width=arg1 height=arg0 depth=arg4
+call configure (38:5): host=arg0 port=default backlog=arg1
+call configure (39:5): host=arg1 port=arg2 backlog=arg0
+call nothing (40:5):
+call Counter::bump (41:5): self=receiver by=default times=arg0
+call Counter::bump (42:5): self=receiver by=arg0 times=arg1
+call Counter::get (43:5): self=receiver
+call configure (44:15): host=arg0 port=default backlog=arg1
+call configure (44:5): host=arg0 port=default backlog=arg1

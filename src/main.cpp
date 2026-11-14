@@ -51,6 +51,7 @@ struct Options {
     bool m_check_borrow{false};
     bool m_warn_shadow{false};
     bool m_werror{false};
+    bool m_dump_calls{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
@@ -58,6 +59,24 @@ struct Options {
     /// Parse entry point shared by every mode; a default-constructed manager simply parses.
     std::shared_ptr<fool::BMICacheManager> m_cache{std::make_shared<fool::BMICacheManager>()};
 };
+
+/// Prints every call whose arguments were bound: parameters in ABI order, each filled by the argument
+/// at the given source position or by the parameter's default.
+void dump_resolved_calls(const fool::TypeCheckerPass2& checker) {
+    auto& interner = fool::StringInterner::get();
+    for (const fool::ResolvedCall& call : checker.resolved_calls()) {
+        const auto& start = call.m_call->m_span.m_start;
+        std::cout << "call " << call.m_display << " (" << start.m_line << ":" << start.m_column << "):";
+        if (call.m_receiver != nullptr) std::cout << " self=receiver";
+        for (size_t i = 0; i < call.m_slots.size(); ++i) {
+            const fool::ResolvedArgument& slot = call.m_slots[i];
+            std::cout << ' ' << interner.resolve(call.m_callee->m_params[i].m_name) << '=';
+            if (slot.m_is_default) std::cout << "default";
+            else std::cout << "arg" << slot.m_source_index;
+        }
+        std::cout << '\n';
+    }
+}
 
 void print_cache_stats(const Options& options) {
     if (options.m_quiet || !options.m_cache->uses_disk()) return;
@@ -83,6 +102,7 @@ void print_usage() {
         "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
         "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
         "  -Werror                treat warnings as errors\n"
+        "  --dump-calls           print each call's arguments in canonical (ABI) slot order, defaults filled\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -140,6 +160,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     fool::TypeCheckerPass2 checker(pass0, diag);
     checker.set_warn_shadow(options.m_warn_shadow);
     if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
+    if (options.m_dump_calls && !diag.has_errors()) dump_resolved_calls(checker);
 }
 
 struct Expectation {
@@ -277,6 +298,10 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
     checker.set_strict_names(true);
     checker.set_warn_shadow(options.m_warn_shadow);
     if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(*table, diag).check_module();
+    if (options.m_dump_calls && !diag.has_errors()) {
+        std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << ":\n";
+        dump_resolved_calls(checker);
+    }
     return table;
 }
 
@@ -354,6 +379,8 @@ int main(const int argc, char** argv) {
             options.m_roots.emplace_back(argv[++i]);
         } else if (arg == "--project") {
             options.m_project = true;
+        } else if (arg == "--dump-calls") {
+            options.m_dump_calls = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;

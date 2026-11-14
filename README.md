@@ -318,6 +318,7 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 | Expression type inference, generics instantiation | Not implemented |
 | Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
 | BMI cache (`.flbmi`): SHA-256 keyed parse-tree cache (`--cache`) | Implemented (see below) |
+| Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented |
 | HIR/MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
@@ -424,6 +425,21 @@ Exit codes: `0` success, `1` diagnostics with errors (or failed expectations), `
 
 **Expect-error tests.** A file containing `// expect-error: <text>` comments is checked in test mode and passes only if exactly those errors are reported. A trailing comment applies to its own line; a comment on its own line applies to the next line. See `tests/negative/`.
 
+### Bound calls (`--dump-calls`)
+
+Pass 2 binds every call's arguments to the callee's parameters and keeps the result (`ResolvedCall`): one slot per
+parameter in declaration (ABI) order, filled either by the caller's argument or by the parameter's default
+expression, plus the receiver object of a method call. Named arguments are moved into place and middle defaults are
+filled, so later stages (HIR lowering) never look at labels again. Calls that failed binding are not recorded.
+`foolc --dump-calls file.fl` prints the table, e.g. for `render_box(height: 200, width: 100, y: 20, x: 10, depth: 3)`:
+
+```
+call render_box (37:5): x=arg3 y=arg2 scale=default width=arg1 height=arg0 depth=arg4
+```
+
+`argN` is the position of the argument in the call as written, which is also the order the arguments must be
+evaluated in. Nested calls are listed before the call that contains them. Golden files live in `tests/calls/`.
+
 ### The `.flbmi` cache
 
 `foolc --cache` (or `--cache-dir <dir>`) stores the parse tree of every file it reads as a Binary Module Interface and
@@ -471,7 +487,7 @@ structural type information the checker has. Shadowed variables are tracked as s
 
 ```bash
 ctest --test-dir build --output-on-failure
-ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow, warn, bmi
+ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow, warn, bmi, calls
 ```
 
 ---

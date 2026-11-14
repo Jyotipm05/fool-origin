@@ -361,6 +361,29 @@ struct SymbolBinding {
     SymbolBinding() = default;
 };
 
+/// One filled parameter slot of a resolved call: the caller's argument or the parameter's default.
+struct ResolvedArgument {
+    static constexpr size_t NO_SOURCE = static_cast<size_t>(-1);
+    const ExprNode* m_value{nullptr};   ///< the argument expression, or the parameter's default expression
+    bool m_is_default{false};
+    size_t m_source_index{NO_SOURCE};   ///< position in `CallExpr::m_args` (NO_SOURCE for defaults)
+};
+
+/**
+ * @struct ResolvedCall
+ * @brief A call whose arguments were bound successfully: one entry per parameter of the callee in
+ *        declaration (ABI) order, with named arguments moved into place and defaults filled in.
+ * @details This is the form later stages (HIR lowering) consume; `m_args` keeps the source order, which
+ *          is the order the arguments must be evaluated in.
+ */
+struct ResolvedCall {
+    const CallExpr* m_call{nullptr};
+    const FunctionDeclNode* m_callee{nullptr};
+    std::string m_display;                  ///< `f`, `Type::method`, `module::f`
+    const ExprNode* m_receiver{nullptr};    ///< object of a method call (`obj.method(...)`), else nullptr
+    std::vector<ResolvedArgument> m_slots;  ///< one per parameter, canonical order
+};
+
 /**
  * @class TypeCheckerPass2
  * @brief Pass 2 Semantic Engine: scoping, assignment-vs-declaration, transitive immutability,
@@ -377,6 +400,8 @@ class TypeCheckerPass2 {
     int m_loop_depth{0};
     bool m_strict_names{false};
     bool m_warn_shadow{false};
+    std::vector<ResolvedCall> m_resolved_calls;                       ///< in the order the calls were checked
+    std::unordered_map<const CallExpr*, size_t> m_resolved_call_index;
 
 public:
     // 2. Constructors in the MIDDLE
@@ -391,6 +416,9 @@ public:
     /// Checks every active declaration known to the Pass 0 table. Returns true if no errors were reported.
     bool check_module();
     bool check_function(const FunctionDeclNode* fn, const ClassDeclNode* owner);
+    /// Calls whose arguments were bound without errors, with canonical slot order and defaults filled.
+    [[nodiscard]] const std::vector<ResolvedCall>& resolved_calls() const { return m_resolved_calls; }
+    [[nodiscard]] const ResolvedCall* find_resolved_call(const CallExpr* call) const;
 
 private:
     // scopes
@@ -435,7 +463,8 @@ private:
     void check_call(const CallExpr* call);
     void check_member_access(const MemberExpr* member);
     void check_struct_literal(const StructLiteralExpr* lit);
-    void bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name);
+    void bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name,
+                        const ExprNode* receiver);
     [[nodiscard]] const SymbolBinding* root_binding(const ExprNode* expr);
     [[nodiscard]] ConstTable visible_constants() const;
     void check_const_fits_type(const TypeNode* type, const ConstValue& value, const SourceSpan &span, std::string_view what) const;

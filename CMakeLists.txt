@@ -225,6 +225,30 @@ if (BUILD_TESTING)
                      -DWORK_DIR=${CMAKE_BINARY_DIR}/bmi-cache-test
                      "-DNEGATIVE_FILES_ARG=${FOOL_NEGATIVE_FILE_ARG}"
                      -P ${CMAKE_SOURCE_DIR}/tests/cache/cache_cycle.cmake)
+    # 10. Bound calls (`--dump-calls`): named arguments in canonical slots with defaults filled, compared
+    #     with golden files; the project run checks the same shape on examples/03_middle_defaults.
+    file(GLOB FOOL_CALL_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/calls/*.fl")
+    foreach(CALL_FILE ${FOOL_CALL_FILES})
+        get_filename_component(CALL_NAME "${CALL_FILE}" NAME_WE)
+        add_test(NAME "foolc_calls_${CALL_NAME}"
+                 COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${CALL_FILE}
+                         -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/calls/${CALL_NAME}.expected
+                         -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+        set_tests_properties("foolc_calls_${CALL_NAME}" PROPERTIES LABELS "calls")
+        # Same output (columns included) on the tree decoded from the .flbmi encoding.
+        add_test(NAME "foolc_calls_${CALL_NAME}_roundtrip"
+                 COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${CALL_FILE} -DEXTRA=--bmi-roundtrip
+                         -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/calls/${CALL_NAME}.expected
+                         -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+        set_tests_properties("foolc_calls_${CALL_NAME}_roundtrip" PROPERTIES LABELS "calls;bmi")
+    endforeach()
+    add_test(NAME foolc_calls_project
+             COMMAND foolc --project --dump-calls -I stdlib -I examples
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_calls_project PROPERTIES LABELS "calls;project"
+        PASS_REGULAR_EXPRESSION
+        "call render_box \\([0-9]+:[0-9]+\\): x=arg0 y=arg1 scale=default width=arg2 height=arg3 depth=default")
+
     set_tests_properties(foolc_bmi_selftest foolc_bmi_roundtrip_sources foolc_bmi_roundtrip_positive
                          foolc_bmi_roundtrip_negative foolc_bmi_roundtrip_borrow foolc_bmi_roundtrip_warn
                          foolc_bmi_roundtrip_project foolc_bmi_cache_cycle PROPERTIES LABELS "bmi")
