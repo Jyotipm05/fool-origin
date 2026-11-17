@@ -42,7 +42,7 @@ constexpr int MAX_DEPTH = 1000;
 enum Tag : uint8_t {
     // expressions
     ExprNull = 0, ExprInt = 1, ExprFloat, ExprString, ExprBool, ExprIdent, ExprPath, ExprUnary, ExprBinary,
-    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct,
+    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral,
     // statements
     StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional,
     // declarations
@@ -190,6 +190,8 @@ private:
             u8(ExprString); span(n->m_span); raw(n->m_value);
         } else if (auto* n = dynamic_cast<const BooleanLiteralExpr*>(e)) {
             u8(ExprBool); span(n->m_span); boolean(n->m_value);
+        } else if (auto* n = dynamic_cast<const NullLiteralExpr*>(e)) {
+            u8(ExprNullLiteral); span(n->m_span);
         } else if (auto* n = dynamic_cast<const IdentifierExpr*>(e)) {
             u8(ExprIdent); span(n->m_span); sym(n->m_identifier);
         } else if (auto* n = dynamic_cast<const PathExpr*>(e)) {
@@ -538,7 +540,7 @@ private:
         if (guard.too_deep()) return nullptr;
         auto* t = m_arena.create<TypeNode>();
         t->m_span = span();
-        t->m_kind = enum8<TypeNodeKind>(static_cast<uint8_t>(TypeNodeKind::Never));
+        t->m_kind = enum8<TypeNodeKind>(static_cast<uint8_t>(TypeNodeKind::Optional));
         t->m_is_const = boolean();
         t->m_path = syms();
         t->m_generic_args = generic_args();
@@ -565,6 +567,7 @@ private:
         case ExprFloat: { sp = span(); result = m_arena.create<FloatLiteralExpr>(std::bit_cast<double>(u64())); break; }
         case ExprString: { sp = span(); result = m_arena.create<StringLiteralExpr>(raw()); break; }
         case ExprBool: { sp = span(); result = m_arena.create<BooleanLiteralExpr>(boolean()); break; }
+        case ExprNullLiteral: { sp = span(); result = m_arena.create<NullLiteralExpr>(); break; }
         case ExprIdent: { sp = span(); result = m_arena.create<IdentifierExpr>(sym()); break; }
         case ExprPath: {
             sp = span();

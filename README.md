@@ -9,6 +9,7 @@
 - [Key Language Invariants](#key-language-invariants)
   - [1. File Triad Architecture (.fo / .fl / .fex)](#1-file-triad-architecture-fo--fl--fex)
   - [2. Mutability & Reference Model](#2-mutability--reference-model)
+  - [2d. Optional Types (`T?`)](#2d-optional-types-t)
   - [3. Explicit Receivers](#3-explicit-receivers)
   - [4. Middle & Trailing Parameter Defaults](#4-middle--trailing-parameter-defaults)
   - [5. Nominal Capability Rulesets & Blueprints](#5-nominal-capability-rulesets--blueprints)
@@ -36,6 +37,10 @@ Fool replaces legacy C/C++ header files and monolithic source translation units 
 | **`.fo`** | **Interface Blueprint** | Declarations, nominal `ruleset` capability bounds, `class` memory layouts, `blueprint` templates, and public function signatures. | **Zero executable bodies**. Cached as Binary Module Interfaces (`.flbmi`, see below). |
 | **`.fl`** | **Implementation Unit** | Pure Fool algorithmic logic, method bodies, and state machine step transitions. | Declares `module <name>;`. **Never self-imports its companion `.fo`**. External `#import` allowed. |
 | **`.fex`** | **External / Platform Overlay** | Foreign ABI bindings (`@extern("C")`, `@extern("llvm")`), kernel syscalls, and target-specific overrides. | Gated by `@target(os = "...", arch = "...")`. Merged in Pass 0. |
+
+Pairing every `.fo` with a `.fl` is the preferred layout but not required: a `.fo` on its own is a valid, complete module
+(types, constants and signatures whose implementation lives elsewhere), and importers type-check their calls against it.
+(`tests/project/interface_only`, and `stdlib/core/rulesets.fo` / `stdlib/sys/*.fo` in the standard library.)
 
 ```mermaid
 flowchart TD
@@ -137,6 +142,39 @@ var sq    = @dynamic_cast<*Square>(shape);    // null unless `shape` really is a
 - `@dynamic_cast` is only type-checked today: classes do not declare which rulesets they implement and there is no
   code generator yet, so conformance and the runtime type test are future work.
 
+### 2d. Optional Types (`T?`)
+
+A value that may be absent has an optional type. `null` is the empty value and only an optional can hold it:
+
+```fool
+fn find(id: i32) -> Entity?;                 // may return null
+
+fn tick(a: Entity?) {
+    var found: Entity? = find(1);
+    if (a) { update(&a); }                   // `a` is a plain Entity inside the branch
+    if (found == null) { return; }
+    found.id = 3;                            // narrowed for the rest of the block
+}
+```
+
+- `T` converts to `T?` and `U?` converts to `T?` when `U` converts to `T`. `T?` never converts back to `T`, and
+  `null` never converts to a non-optional type; both are compile errors, with a hint.
+- Using the value (`a.field`, `a.method()`, `*a`, `a[i]`) needs the compiler to see that it holds a value. Variables
+  (including parameters) are narrowed by `if (a)`, `a != null`, `a == null` (the other branch), `!a`, `&&` / `||`
+  (for the right operand), an early `return` / `break` / `continue` in `if (a == null) { ... }`, a loop condition
+  and by initializing or assigning a plain value. Assigning anything else, or taking `&a`, forgets it; a loop body
+  that assigns the variable starts without it. Fields, globals and call results are never narrowed: bind them to a
+  local first.
+- `if` / `while` conditions accept an optional (true = holds a value). `==` / `!=` only compare with `null`;
+  arithmetic and ordering on an optional are errors.
+- `*T?` is a nullable pointer (the `?` applies to the whole type), `@dynamic_cast<*T?>(p)` states that the result may be
+  null. An optional field that a struct literal leaves out starts as `null`. `T??` is rejected.
+
+### 2e. Refactor-friendly member access
+
+`.` reaches a member whether the left side is a value, a reference or a pointer, so `p.x` keeps working when a
+variable changes from `T` to `&T` or `*T`. The constness of the view still applies (`const& T` is read-only).
+
 ---
 
 ### 3. Explicit Receivers
@@ -175,7 +213,11 @@ async fn render_box(x: f32, y: f32, scale: f32 = 1.0, width: f32, height: f32) -
 // Call sites:
 render_box(10.0, 20.0, 1.0, 100.0, 200.0);       // Positional
 render_box(10.0, 20.0, width: 100.0, height: 200.0); // Middle default preserved with named args
+render_box(10.0, 20.0, width = 100.0, height = 200.0); // `name = value` is the same label
 ```
+
+Inside a call's argument list `name = value` is always a label, never an assignment, and is checked like `name: value`
+(unknown or repeated names, a positional argument after a named one, missing arguments and mismatched types are errors).
 
 ---
 
@@ -305,7 +347,29 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 4. **Multi-Pass Compilation Pipeline**:
    - **Pass 0 (Target Pruning)**: Evaluates `@target(os, arch, pointer_width)` attributes (several `@target`s are OR'd, keys inside one are AND'd; `os = "posix"` matches linux/darwin/BSDs), top-level and statement-level `@if` conditions, module parameters and `constx` values. Platform files are selected by stem suffix (`_linux`, `_posix`, `_windows`, `_wasm`, `_wasi`, ...). The AST is never mutated, so one tree can be checked under several instantiations.
    - **Pass 1 (Module Graph)**: Indexes files by their declared module name, resolves `#import`s (including template arguments), reports unresolved/self/cyclic imports and produces a topological compilation order.
-   - **Pass 2 (Type Checking)**: Declaration consistency between `.fo` and `.fl`, duplicate fields/variants/definitions, `const`/`const&`/`const*` immutability, `this` receiver rules, use-after-move for consuming receivers, named/default argument binding, struct-literal field checks, `constx` evaluation with integer range and overflow checks, return-path analysis, `break`/`continue` placement.
+   - **Pass 2 (Type Checking)**: Declaration consistency between `.fo` and `.fl`, duplicate fields/variants/definitions, `const`/`const&`/`const*` immutability, `this` receiver rules, use-after-move for consuming receivers, named/default argument binding, expression types and implicit-conversion rules, struct-literal field checks, `constx` evaluation with integer range and overflow checks, return-path analysis, `break`/`continue` placement.
+
+### Expression types and implicit conversions
+
+Pass 2 infers a type for every expression it visits (`--dump-types` prints them; `TypeCheckerPass2::expression_types()` is
+the table HIR lowering will read) and rejects implicit conversions that lose information. A literal adapts to the type it
+is used as; the rest is explicit.
+
+| Allowed implicitly | Needs `@static_cast` / `@bit_cast` / `@reinterpret_cast` |
+| :--- | :--- |
+| integer to a wider integer of the same signedness; unsigned to a strictly wider signed integer | narrowing, or changing signedness (`i64`→`i32`, `u32`→`i32`) |
+| `f32` to `f64` | `f64`→`f32`; integer ↔ float; `bool` ↔ number (`x != 0`) |
+| `&T` ↔ `*T`; adding `const` to a view | removing `const`; changing a primitive pointee (`*i32`→`*u8`); integer → pointer |
+| class `A` to class `A` | class `A` to unrelated class `B` (rulesets and enums are not judged: conformance is not modelled) |
+
+Where it applies: initializers, assignments, `return`, call arguments (non-generic callees), struct-literal fields,
+arithmetic/comparison operands (one side must convert to the other), `&&`/`||` operands, and `if`/`while` conditions,
+which must be `bool`. `!` is logical not on a `bool` and bitwise complement on an integer.
+
+The check is deliberately conservative: a type the checker cannot determine (generic parameters, names from modules it
+cannot see, results of unresolved calls) is never reported, so a missed error is possible but a wrong one should not be.
+An unannotated `var x = 1;` keeps the type "integer literal" (adapting to later uses); defaulting it to a concrete width
+is a HIR decision that is not made yet.
 
 ### Implementation status
 
@@ -315,10 +379,12 @@ The `foolc` compiler is written in modern C++23 using C++ modules (`.ixx` interf
 | Pass 0 pruning, `@if def(...)`, const evaluation | Implemented |
 | Pass 1 module graph, import templates, cycle detection | Implemented |
 | Pass 2 checks listed above, named casts | Implemented (name/type resolution is structural, not a full type system) |
-| Expression type inference, generics instantiation | Not implemented |
+| Expression types and implicit-conversion checks (`--dump-types`) | Implemented (conservative, see above) |
+| Generics instantiation | Not implemented |
 | Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
 | BMI cache (`.flbmi`): SHA-256 keyed parse-tree cache (`--cache`) | Implemented (see below) |
-| Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented |
+| Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented (`name: v` and `name = v` labels) |
+| Optional types `T?`, `null`, flow narrowing | Implemented (front end, checks and cache; no code generation yet) |
 | HIR/MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
@@ -416,6 +482,7 @@ foolc --project -I stdlib -I examples   # explicit search roots
 foolc --graph                           # also print the module compilation order
 foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
+foolc --dump-types file.fl              # inferred type of every expression
 foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
 foolc examples/01_basics.fl             # parse + local checks for single files
@@ -487,7 +554,7 @@ structural type information the checker has. Shadowed variables are tracked as s
 
 ```bash
 ctest --test-dir build --output-on-failure
-ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow, warn, bmi, calls
+ctest --test-dir build -L negative   # labels: smoke, project, targets, examples, stdlib, positive, negative, borrow, warn, bmi, calls, types
 ```
 
 ---

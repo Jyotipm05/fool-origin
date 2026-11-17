@@ -82,6 +82,7 @@ private:
 
     // --- types and generics (Parser.cpp)
     TypeNode* parse_type(bool allow_generic_args = true);
+    TypeNode* parse_type_without_optional(bool allow_generic_args);
     std::vector<GenericArg> parse_generic_args();
     std::vector<GenericParam> parse_generic_params();
     ExprNode* parse_angle_expression();

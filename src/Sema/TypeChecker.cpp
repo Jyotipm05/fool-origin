@@ -38,6 +38,7 @@ namespace fool {
                     return type->m_path.empty() ? INVALID_SYMBOL_ID : type->m_path.back();
                 case TypeNodeKind::Pointer:
                 case TypeNodeKind::Reference:
+                case TypeNodeKind::Optional:
                     return nominal_name(type->m_inner);
                 case TypeNodeKind::Never:
                     return INVALID_SYMBOL_ID;
@@ -93,8 +94,17 @@ namespace fool {
     // Scopes
     // ---------------------------------------------------------------------------------------------
 
-    void TypeCheckerPass2::push_scope() { m_scopes.emplace_back(); }
-    void TypeCheckerPass2::pop_scope() { m_scopes.pop_back(); }
+    void TypeCheckerPass2::push_scope() {
+        m_scopes.emplace_back();
+        m_narrow_marks.push_back(m_narrow_log.size());
+    }
+
+    void TypeCheckerPass2::pop_scope() {
+        // Narrowing established inside the scope ends with it (before its bindings go away, so the names still resolve).
+        unnarrow_to(m_narrow_marks.back());
+        m_narrow_marks.pop_back();
+        m_scopes.pop_back();
+    }
 
     SymbolBinding *TypeCheckerPass2::lookup(const SymbolID name) {
         for (auto scope = m_scopes.rbegin(); scope != m_scopes.rend(); ++scope) {
@@ -145,9 +155,11 @@ namespace fool {
         binding.m_binding_kind = kind;
         binding.m_span = span;
         if (type != nullptr) {
-            binding.m_is_const_view = type->is_const_view();
-            binding.m_is_pointer = type->m_kind == TypeNodeKind::Pointer;
-            binding.m_is_view = type->is_view();
+            // `T?` has the access properties of `T` (a nullable pointer is still a pointer).
+            const TypeNode *shape = type->m_kind == TypeNodeKind::Optional && type->m_inner != nullptr ? type->m_inner : type;
+            binding.m_is_const_view = shape->is_const_view();
+            binding.m_is_pointer = shape->m_kind == TypeNodeKind::Pointer;
+            binding.m_is_view = shape->is_view();
             binding.m_type_name = nominal_name(type);
             binding.m_static_type = static_type_of(type);
         }
@@ -451,6 +463,8 @@ namespace fool {
         m_current_owner = owner;
         m_loop_depth = 0;
         m_scopes.clear();
+        m_narrow_log.clear();
+        m_narrow_marks.clear();
         push_scope();
 
         if (fn->m_receiver.m_kind != ReceiverKind::None) {
@@ -559,10 +573,14 @@ namespace fool {
                              "non-void function '" + qualified_name(m_current_fn) + "' must return a value of type '" +
                              type_to_string(rt) + "'");
             } else if (ret->m_value != nullptr) {
+                const size_t errors_before_const_checks = m_diag.error_count();
                 const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
                 const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
                 if (const auto value = evaluator.evaluate(ret->m_value, /*report=*/false)) {
                     check_const_fits_type(rt, *value, ret->m_span, "return value");
+                }
+                if (m_diag.error_count() == errors_before_const_checks) {
+                    check_assignable(static_type_of(rt), ret->m_value, "return value of '" + qualified_name(m_current_fn) + "'");
                 }
             }
         } else if (const auto *expr_stmt = dynamic_cast<const ExprStmt *>(stmt)) {
@@ -573,14 +591,41 @@ namespace fool {
             check_block_scoped(block);
         } else if (const auto *if_stmt = dynamic_cast<const IfStmt *>(stmt)) {
             check_expression(if_stmt->m_condition);
+            check_condition(if_stmt->m_condition, "if");
+            std::vector<SymbolID> holds_value_then;
+            std::vector<SymbolID> holds_value_else;
+            collect_narrowing(if_stmt->m_condition, true, holds_value_then);
+            collect_narrowing(if_stmt->m_condition, false, holds_value_else);
+
+            size_t mark = m_narrow_log.size();
+            narrow(holds_value_then);
             check_block_scoped(if_stmt->m_then);
-            if (if_stmt->m_else != nullptr) check_statement(if_stmt->m_else);
+            unnarrow_to(mark);
+            if (if_stmt->m_else != nullptr) {
+                narrow(holds_value_else);
+                check_statement(if_stmt->m_else);
+                unnarrow_to(mark);
+            }
+            // `if (!a) return;` leaves `a` narrowed for the rest of the enclosing block.
+            const bool then_exits = stmt_always_exits(if_stmt->m_then);
+            const bool else_exits = if_stmt->m_else != nullptr && stmt_always_exits(if_stmt->m_else);
+            if (then_exits && !else_exits) narrow(holds_value_else);
+            else if (else_exits && !then_exits) narrow(holds_value_then);
         } else if (const auto *while_stmt = dynamic_cast<const WhileStmt *>(stmt)) {
+            kill_assigned_in(while_stmt->m_body); // later iterations see what the earlier ones assigned
+            kill_assigned_in(while_stmt->m_condition);
             check_expression(while_stmt->m_condition);
+            check_condition(while_stmt->m_condition, "while");
+            std::vector<SymbolID> holds_value;
+            collect_narrowing(while_stmt->m_condition, true, holds_value);
+            const size_t mark = m_narrow_log.size();
+            narrow(holds_value);
             ++m_loop_depth;
             check_block_scoped(while_stmt->m_body);
             --m_loop_depth;
+            unnarrow_to(mark);
         } else if (const auto *for_stmt = dynamic_cast<const ForStmt *>(stmt)) {
+            kill_assigned_in(for_stmt->m_body);
             check_expression(for_stmt->m_iterable);
             push_scope();
             SymbolBinding var;
@@ -608,6 +653,7 @@ namespace fool {
     void TypeCheckerPass2::check_var_decl(const VarDeclNode *var) {
         if (var->m_initializer != nullptr) check_expression(var->m_initializer);
 
+        const size_t errors_before_const_checks = m_diag.error_count();
         const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
         const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
         std::optional<ConstValue> constant;
@@ -623,7 +669,15 @@ namespace fool {
                 check_const_fits_type(var->m_type, *value, var->m_span, "variable");
             }
         }
+        // The constant checks above already explain a literal of the wrong kind; do not say it twice.
+        if (var->m_type != nullptr && var->m_initializer != nullptr && m_diag.error_count() == errors_before_const_checks) {
+            check_assignable(static_type_of(var->m_type), var->m_initializer, "initialization of '" + name_of(var->m_name) + "'");
+        }
 
+        if (var->m_type == nullptr && var->m_initializer != nullptr && infer_type(var->m_initializer).m_kind == StaticType::Kind::Null) {
+            m_diag.error(var->m_initializer->m_span, "cannot infer the type of '" + name_of(var->m_name) +
+                                                     "' from 'null'; declare it, e.g. 'Entity? " + name_of(var->m_name) + " = null;'");
+        }
         if (lookup_in_current_scope(var->m_name) != nullptr) {
             m_diag.error(var->m_span, "redefinition of '" + name_of(var->m_name) + "' in this scope");
             return;
@@ -641,7 +695,13 @@ namespace fool {
         }
         binding.m_constant = constant;
         if (var->m_type == nullptr && var->m_initializer != nullptr) binding.m_static_type = infer_type(var->m_initializer);
-        declare(binding);
+        // A `T?` initialized with a plain `T` starts out holding a value.
+        if (var->m_type != nullptr && var->m_initializer != nullptr && binding.m_static_type.is_optional()) {
+            const StaticType initial = infer_type(var->m_initializer);
+            binding.m_narrowed = initial.known() && initial.m_kind != StaticType::Kind::Null && !initial.is_optional();
+        }
+        SymbolBinding *declared = declare(binding);
+        if (declared->m_narrowed) { declared->m_narrowed = false; narrow({var->m_name}); }
     }
 
     bool TypeCheckerPass2::always_returns(const std::vector<StmtNode *> &stmts) const {

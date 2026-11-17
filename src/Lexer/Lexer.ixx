@@ -57,6 +57,7 @@ enum class TokenKind : uint16_t {
     KwIn,            ///< 'in'
     KwTrue,          ///< 'true'
     KwFalse,         ///< 'false'
+    KwNull,          ///< 'null' (the empty optional)
     KwAs,            ///< 'as' explicit cast
     KwWhile,         ///< 'while'
     KwStruct,        ///< 'struct' plain data aggregate
@@ -66,6 +67,7 @@ enum class TokenKind : uint16_t {
     // Directives & Punctuation
     Hash,            ///< '#' directive prefix
     HashImport,      ///< '#import' module import directive
+    Question,        ///< '?' optional type suffix
     At,              ///< '@' compile-time attribute directive marker
     OpenParen,       ///< '('
     CloseParen,      ///< ')'

@@ -1,6 +1,6 @@
-# Runs `foolc -q --dump-calls <INPUT>` and compares its output with the golden file EXPECTED.
+# Runs `foolc -q <FLAG> <INPUT>` (FLAG defaults to --dump-calls) and compares its output with the golden file EXPECTED.
 #
-#   cmake -DFOOLC=<foolc> -DINPUT=<file.fl> -DEXPECTED=<file.expected> [-DEXTRA=<flag>] -P run_golden.cmake
+#   cmake -DFOOLC=<foolc> -DINPUT=<file.fl> -DEXPECTED=<file.expected> [-DFLAG=--dump-calls|--dump-types] [-DEXTRA=<flag>] -P run_golden.cmake
 
 cmake_minimum_required(VERSION 3.20)
 
@@ -10,7 +10,11 @@ foreach(REQUIRED FOOLC INPUT EXPECTED)
     endif()
 endforeach()
 
-execute_process(COMMAND "${FOOLC}" -q --dump-calls ${EXTRA} "${INPUT}"
+if(NOT DEFINED FLAG)
+    set(FLAG --dump-calls)
+endif()
+
+execute_process(COMMAND "${FOOLC}" -q ${FLAG} ${EXTRA} "${INPUT}"
                 OUTPUT_VARIABLE ACTUAL ERROR_VARIABLE ERRORS RESULT_VARIABLE RC)
 if(NOT RC EQUAL 0)
     message(FATAL_ERROR "foolc failed (${RC}) on ${INPUT}:\n${ACTUAL}${ERRORS}")

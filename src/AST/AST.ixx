@@ -126,7 +126,8 @@ enum class TypeNodeKind : uint8_t {
     Path,      ///< u32, std::core::Span<T>
     Pointer,   ///< *T / const* T
     Reference, ///< &T / const& T
-    Never      ///< !
+    Never,     ///< !
+    Optional   ///< T? (m_inner = T): a value that may be `null`
 };
 
 /**
@@ -195,6 +196,12 @@ public:
 
     // 2. Constructors
     explicit BooleanLiteralExpr(bool val) : m_value(val) {}
+};
+
+/// `null`: the empty optional.
+class NullLiteralExpr : public ExprNode {
+public:
+    NullLiteralExpr() = default;
 };
 
 class IdentifierExpr : public ExprNode {

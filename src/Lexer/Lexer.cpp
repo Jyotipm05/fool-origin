@@ -46,6 +46,7 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::KwIn: return "in";
         case TokenKind::KwTrue: return "true";
         case TokenKind::KwFalse: return "false";
+        case TokenKind::KwNull: return "null";
         case TokenKind::KwAs: return "as";
         case TokenKind::KwWhile: return "while";
         case TokenKind::KwStruct: return "struct";
@@ -54,6 +55,7 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::Hash: return "#";
         case TokenKind::HashImport: return "#import";
         case TokenKind::At: return "@";
+        case TokenKind::Question: return "?";
         case TokenKind::OpenParen: return "(";
         case TokenKind::CloseParen: return ")";
         case TokenKind::OpenBrace: return "{";
@@ -191,6 +193,7 @@ TokenKind Lexer::classify_keyword(std::string_view text) {
     if (text == "in")        return TokenKind::KwIn;
     if (text == "true")      return TokenKind::KwTrue;
     if (text == "false")     return TokenKind::KwFalse;
+    if (text == "null")      return TokenKind::KwNull;
     if (text == "as")        return TokenKind::KwAs;
     if (text == "while")     return TokenKind::KwWhile;
     if (text == "struct")    return TokenKind::KwStruct;
@@ -278,6 +281,7 @@ Token Lexer::next_token() {
 
     switch (c) {
         case '@': return make_token(TokenKind::At, start);
+        case '?': return make_token(TokenKind::Question, start);
         case '(': return make_token(TokenKind::OpenParen, start);
         case ')': return make_token(TokenKind::CloseParen, start);
         case '{': return make_token(TokenKind::OpenBrace, start);

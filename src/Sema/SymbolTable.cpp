@@ -74,6 +74,8 @@ std::string type_to_string(const TypeNode* type) {
     switch (type->m_kind) {
         case TypeNodeKind::Never:
             return "!";
+        case TypeNodeKind::Optional:
+            return type_to_string(type->m_inner) + "?";
         case TypeNodeKind::Pointer:
             return std::string(type->m_is_const ? "const* " : "*") + type_to_string(type->m_inner);
         case TypeNodeKind::Reference:

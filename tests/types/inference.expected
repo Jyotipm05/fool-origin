@@ -1,0 +1,33 @@
+11:12-17 binary u16
+11:12-13 ident u16
+11:16-17 ident u16
+15:17-18 int integer literal
+16:17-20 float floating-point literal
+17:15-24 binary u8
+17:15-20 ident u8
+17:23-24 int integer literal
+18:15-27 binary i64
+18:15-20 ident u8
+18:23-27 ident i64
+19:16-26 binary bool
+19:16-21 ident integer literal
+19:24-26 int integer literal
+20:16-28 binary bool
+20:16-20 ident bool
+20:24-28 bool bool
+21:17-20 member i32
+21:17-18 ident Point
+22:19-22 member i32
+22:19-20 ident &Point
+23:16-36 struct Point
+23:27-28 int integer literal
+23:33-34 int integer literal
+24:18-28 call u32
+24:23-24 int integer literal
+24:26-27 int integer literal
+25:20-31 cast i32
+25:20-24 ident i64
+26:20-25 unary i64
+26:21-25 ident i64
+27:20-26 unary &integer literal
+27:21-26 ident integer literal

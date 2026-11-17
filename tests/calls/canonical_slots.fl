@@ -41,6 +41,6 @@ fn caller() {
     counter.bump(times: 2);
     counter.bump(5, 6);
     counter.get();
-    configure(configure(1, backlog: 2), backlog: 3);
+    configure(render_box(1, 2, width: 3, height: 4), backlog: 3);
     return;
 }

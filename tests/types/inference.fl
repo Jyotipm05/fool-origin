@@ -1,0 +1,29 @@
+// Inferred expression types. Expected output: inference.expected
+
+module tests::types::inference;
+
+class Point {
+    x: i32;
+    y: i32;
+}
+
+fn area(w: u16, h: u16) -> u32 {
+    return w * h;
+}
+
+fn infer(p: Point, r: &Point, small: u8, wide: i64) {
+    var count = 1;
+    var ratio = 2.5;
+    var sum = small + 3;
+    var big = small + wide;
+    var flag = count < 10;
+    var both = flag && true;
+    var field = p.x;
+    var through = r.y;
+    var made = Point { x: 1, y: 2 };
+    var result = area(1, 2);
+    var narrowed = wide as i32;
+    var inverted = !wide;
+    var location = &count;
+    return;
+}

@@ -1,0 +1,73 @@
+// Conversions that are allowed without a cast, and operators on mixed-but-compatible operands.
+
+module tests::positive::implicit_conversions;
+
+class Point {
+    x: i32;
+    y: i32;
+}
+
+fn takes_i64(v: i64) {
+    return;
+}
+
+fn takes_f64(v: f64) {
+    return;
+}
+
+fn takes_const_view(p: const* i32) {
+    return;
+}
+
+fn bump(p: &i32) {
+    return;
+}
+
+fn widen() -> i64 {
+    var small: i32 = 1;
+    return small;
+}
+
+fn conversions() {
+    var byte: u8 = 200;
+    var half: u16 = byte;
+    var word: u32 = half;
+    var signed_word: i64 = word;
+    var from_i8: i32 = 5;
+    var float_value: f32 = 1;
+    var double_value: f64 = float_value;
+    var literal_float: f64 = 2.5;
+    takes_i64(from_i8);
+    takes_i64(byte);
+    takes_f64(float_value);
+    takes_f64(3);
+
+    var counter = 0;
+    counter = counter + 1;
+    var ratio = 1.5;
+    ratio = ratio * 2;
+    var scaled = float_value * 2;
+    var total = from_i8 + 10 + byte;
+    var is_less = from_i8 < 10;
+    var combined = is_less && (counter == 1) || !is_less;
+    var masked = (signed_word & 255) | (signed_word ^ 1);
+    var inverted = !signed_word;
+    var same_flag: bool = is_less == combined;
+
+    if (is_less) {
+        counter = 2;
+    }
+    while (counter < 5) {
+        counter = counter + 1;
+    }
+
+    var target: i32 = 1;
+    var view: *i32 = &target;
+    var read_only: const* i32 = view;
+    takes_const_view(view);
+    takes_const_view(&target);
+    bump(&target);
+    var point = Point { x: from_i8, y: 2 };
+    var copy: Point = point;
+    return;
+}

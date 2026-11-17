@@ -7,5 +7,5 @@ call nothing (40:5):
 call Counter::bump (41:5): self=receiver by=default times=arg0
 call Counter::bump (42:5): self=receiver by=arg0 times=arg1
 call Counter::get (43:5): self=receiver
-call configure (44:15): host=arg0 port=default backlog=arg1
+call render_box (44:15): x=arg0 y=arg1 scale=default width=arg2 height=arg3 depth=default
 call configure (44:5): host=arg0 port=default backlog=arg1

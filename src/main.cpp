@@ -52,6 +52,7 @@ struct Options {
     bool m_warn_shadow{false};
     bool m_werror{false};
     bool m_dump_calls{false};
+    bool m_dump_types{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
@@ -75,6 +76,44 @@ void dump_resolved_calls(const fool::TypeCheckerPass2& checker) {
             else std::cout << "arg" << slot.m_source_index;
         }
         std::cout << '\n';
+    }
+}
+
+/// Prints the inferred type of every checked expression, in source order: `line:col-endcol kind type`
+/// (`?` when the type could not be inferred).
+void dump_expression_types(const fool::TypeCheckerPass2& checker) {
+    struct Entry { const fool::ExprNode* m_expr; const fool::StaticType* m_type; };
+    std::vector<Entry> entries;
+    for (const auto& [expr, type] : checker.expression_types()) entries.push_back({expr, &type});
+    std::sort(entries.begin(), entries.end(), [](const Entry& a, const Entry& b) {
+        const auto& sa = a.m_expr->m_span;
+        const auto& sb = b.m_expr->m_span;
+        if (sa.m_start.m_offset != sb.m_start.m_offset) return sa.m_start.m_offset < sb.m_start.m_offset;
+        return sa.m_end.m_offset > sb.m_end.m_offset; // enclosing expression first
+    });
+    auto kind_of = [](const fool::ExprNode* e) -> const char* {
+        if (dynamic_cast<const fool::IntegerLiteralExpr*>(e)) return "int";
+        if (dynamic_cast<const fool::FloatLiteralExpr*>(e)) return "float";
+        if (dynamic_cast<const fool::StringLiteralExpr*>(e)) return "string";
+        if (dynamic_cast<const fool::BooleanLiteralExpr*>(e)) return "bool";
+        if (dynamic_cast<const fool::NullLiteralExpr*>(e)) return "null";
+        if (dynamic_cast<const fool::IdentifierExpr*>(e)) return "ident";
+        if (dynamic_cast<const fool::PathExpr*>(e)) return "path";
+        if (dynamic_cast<const fool::UnaryExpr*>(e)) return "unary";
+        if (dynamic_cast<const fool::BinaryExpr*>(e)) return "binary";
+        if (dynamic_cast<const fool::CastExpr*>(e)) return "cast";
+        if (dynamic_cast<const fool::MemberExpr*>(e)) return "member";
+        if (dynamic_cast<const fool::IndexExpr*>(e)) return "index";
+        if (dynamic_cast<const fool::CallExpr*>(e)) return "call";
+        if (dynamic_cast<const fool::IntrinsicCallExpr*>(e)) return "intrinsic";
+        return "struct";
+    };
+    for (const Entry& entry : entries) {
+        const auto& span = entry.m_expr->m_span;
+        std::cout << span.m_start.m_line << ':' << span.m_start.m_column << '-';
+        if (span.m_end.m_line != span.m_start.m_line) std::cout << span.m_end.m_line << ':';
+        std::cout << span.m_end.m_column << ' ' << kind_of(entry.m_expr) << ' '
+                  << (entry.m_type->known() ? checker.type_text(*entry.m_type) : std::string("?")) << '\n';
     }
 }
 
@@ -103,6 +142,7 @@ void print_usage() {
         "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
         "  -Werror                treat warnings as errors\n"
         "  --dump-calls           print each call's arguments in canonical (ABI) slot order, defaults filled\n"
+        "  --dump-types           print the inferred type of every checked expression (line:col-end kind type)\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -161,6 +201,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     checker.set_warn_shadow(options.m_warn_shadow);
     if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
     if (options.m_dump_calls && !diag.has_errors()) dump_resolved_calls(checker);
+    if (options.m_dump_types && !diag.has_errors()) dump_expression_types(checker);
 }
 
 struct Expectation {
@@ -302,6 +343,10 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
         std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << ":\n";
         dump_resolved_calls(checker);
     }
+    if (options.m_dump_types && !diag.has_errors()) {
+        std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " types:\n";
+        dump_expression_types(checker);
+    }
     return table;
 }
 
@@ -381,6 +426,8 @@ int main(const int argc, char** argv) {
             options.m_project = true;
         } else if (arg == "--dump-calls") {
             options.m_dump_calls = true;
+        } else if (arg == "--dump-types") {
+            options.m_dump_types = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;

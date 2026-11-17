@@ -202,7 +202,9 @@ void Parser::parse_call_arguments(CallExpr* call) {
     while (!check(TokenKind::CloseParen) && !is_at_end()) {
         CallArg arg;
         arg.m_span.m_start = current().m_span.m_start;
-        if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Colon) {
+        // `name: value` and `name = value` both label an argument. Inside an argument list the second form is
+        // never an assignment expression (parenthesize one to pass its value).
+        if (check(TokenKind::Identifier) && (peek().m_kind == TokenKind::Colon || peek().m_kind == TokenKind::Equal)) {
             arg.m_label = current().m_symbol_id;
             advance();
             advance();
@@ -455,6 +457,12 @@ ExprNode* Parser::parse_primary() {
             lit->m_span = span_from(start);
             return lit;
         }
+        case TokenKind::KwNull: {
+            advance();
+            auto* lit = m_arena.create<NullLiteralExpr>();
+            lit->m_span = span_from(start);
+            return lit;
+        }
         case TokenKind::Identifier:
             return parse_path_expression();
         case TokenKind::At:
@@ -482,7 +490,26 @@ ExprNode* Parser::parse_primary() {
 // Types and generics
 // ---------------------------------------------------------------------------------------------
 
+/// A type followed by any number of `?` suffixes. The suffix applies to the whole type to its left, so
+/// `*Entity?` is an optional pointer; the inner type of a pointer or reference is parsed without it.
 TypeNode* Parser::parse_type(bool allow_generic_args) {
+    SourceLocation start = current().m_span.m_start;
+    TypeNode* type = parse_type_without_optional(allow_generic_args);
+    while (type != nullptr && check(TokenKind::Question)) {
+        advance();
+        if (type->m_kind == TypeNodeKind::Optional) {
+            error_here("an optional type cannot be made optional again");
+            continue;
+        }
+        auto* optional = m_arena.create<TypeNode>(TypeNodeKind::Optional);
+        optional->m_inner = type;
+        optional->m_span = span_from(start);
+        type = optional;
+    }
+    return type;
+}
+
+TypeNode* Parser::parse_type_without_optional(bool allow_generic_args) {
     SourceLocation start = current().m_span.m_start;
 
     if (match(TokenKind::Bang)) {
@@ -502,7 +529,7 @@ TypeNode* Parser::parse_type(bool allow_generic_args) {
         advance();
         auto* view = m_arena.create<TypeNode>(kind);
         view->m_is_const = is_const;
-        view->m_inner = parse_type(allow_generic_args);
+        view->m_inner = parse_type_without_optional(allow_generic_args);
         view->m_span = span_from(start);
         return view->m_inner ? view : nullptr;
     }

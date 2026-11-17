@@ -30,7 +30,8 @@ SymbolID nominal_name(const TypeNode* type) {
     switch (type->m_kind) {
         case TypeNodeKind::Path: return type->m_path.empty() ? INVALID_SYMBOL_ID : type->m_path.back();
         case TypeNodeKind::Pointer:
-        case TypeNodeKind::Reference: return nominal_name(type->m_inner);
+        case TypeNodeKind::Reference:
+        case TypeNodeKind::Optional: return nominal_name(type->m_inner);
         case TypeNodeKind::Never: return INVALID_SYMBOL_ID;
     }
     return INVALID_SYMBOL_ID;
@@ -81,6 +82,19 @@ const SymbolBinding* TypeCheckerPass2::root_binding(const ExprNode* expr) {
 void TypeCheckerPass2::check_expression(const ExprNode* expr) {
     if (expr == nullptr) return;
 
+    // Every visited expression gets its type recorded once its operands have been checked (this also
+    // runs on the early returns below). The left side of `=` is never visited on its own, so it is recorded here.
+    struct RecordType {
+        TypeCheckerPass2& m_self;
+        const ExprNode* m_expr;
+        ~RecordType() {
+            if (const auto* assign = dynamic_cast<const BinaryExpr*>(m_expr); assign != nullptr && assign->m_op == TokenKind::Equal) {
+                (void)m_self.infer_type(assign->m_lhs);
+            }
+            (void)m_self.infer_type(m_expr);
+        }
+    } record_type{*this, expr};
+
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(expr)) {
         if (const SymbolBinding* binding = lookup(id->m_identifier)) {
             if (binding->m_is_moved) {
@@ -115,12 +129,24 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
         check_struct_literal(lit);
     } else if (const auto* unary = dynamic_cast<const UnaryExpr*>(expr)) {
         check_expression(unary->m_operand);
+        if (unary->m_op == TokenKind::Star) require_non_null(unary->m_operand, unary->m_span);
     } else if (const auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         if (binary->m_op == TokenKind::Equal) {
             check_assignment(binary);
+        } else if (binary->m_op == TokenKind::AmpAmp || binary->m_op == TokenKind::PipePipe) {
+            // `a && a.ready`: the right operand only runs when the left one was true (`||`: false).
+            check_expression(binary->m_lhs);
+            std::vector<SymbolID> holds_value;
+            collect_narrowing(binary->m_lhs, binary->m_op == TokenKind::AmpAmp, holds_value);
+            const size_t mark = m_narrow_log.size();
+            narrow(holds_value);
+            check_expression(binary->m_rhs);
+            unnarrow_to(mark);
+            check_operands(binary);
         } else {
             check_expression(binary->m_lhs);
             check_expression(binary->m_rhs);
+            check_operands(binary);
         }
     } else if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) {
         check_expression(cast->m_operand);
@@ -130,6 +156,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
     } else if (const auto* index = dynamic_cast<const IndexExpr*>(expr)) {
         check_expression(index->m_base);
         check_expression(index->m_index);
+        require_non_null(index->m_base, index->m_span);
     } else if (const auto* call = dynamic_cast<const CallExpr*>(expr)) {
         check_call(call);
     } else if (const auto* intrinsic = dynamic_cast<const IntrinsicCallExpr*>(expr)) {
@@ -143,6 +170,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
 
 void TypeCheckerPass2::check_member_access(const MemberExpr* member) {
     check_expression(member->m_object);
+    require_non_null(member->m_object, member->m_span);
     const auto* object = dynamic_cast<const IdentifierExpr*>(member->m_object);
     if (object == nullptr) return;
     const SymbolBinding* binding = lookup(object->m_identifier);
@@ -170,10 +198,18 @@ void TypeCheckerPass2::check_struct_literal(const StructLiteralExpr* lit) {
             m_diag.error(init.m_span, "'" + name_of(cls->m_name) + "' has no field '" + name_of(init.m_name) + "'");
         } else if (!provided.insert(init.m_name).second) {
             m_diag.error(init.m_span, "field '" + name_of(init.m_name) + "' is initialized more than once");
+        } else if (cls->m_type_params.empty()) {
+            for (const ParameterDecl& field : cls->m_fields) {
+                if (field.m_name == init.m_name) {
+                    check_assignable(static_type_of(field.m_type), init.m_value, "initializer of field '" + name_of(field.m_name) + "'");
+                }
+            }
         }
     }
     for (const ParameterDecl& field : cls->m_fields) {
-        if (provided.count(field.m_name) == 0) {
+        // An optional field that is not mentioned starts out as `null`.
+        const bool optional_field = field.m_type != nullptr && field.m_type->m_kind == TypeNodeKind::Optional;
+        if (provided.count(field.m_name) == 0 && !optional_field) {
             m_diag.error(lit->m_span, "missing initializer for field '" + name_of(field.m_name) + "' of '" + name_of(cls->m_name) + "'");
         }
     }
@@ -213,6 +249,13 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
                                           "' (declared with 'const')");
             } else {
                 binding->m_is_moved = false; // assignment re-initializes a moved-from variable
+                check_assignable(binding->m_static_type, assign->m_rhs, "assignment to '" + name_of(name) + "'");
+                if (binding->m_static_type.is_optional()) {
+                    // What was just stored decides whether the variable holds a value from here on.
+                    const StaticType stored = infer_type(assign->m_rhs);
+                    kill_narrowing(name);
+                    if (stored.known() && stored.m_kind != StaticType::Kind::Null && !stored.is_optional()) narrow({name});
+                }
             }
             return;
         }
@@ -221,6 +264,8 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
                 m_diag.error(lhs->m_span, "cannot assign to " +
                                           std::string(global->m_kind == BindingKind::Constx ? "constant" : "immutable binding") +
                                           " '" + name_of(name) + "'");
+            } else {
+                check_assignable(static_type_of(global->m_type), assign->m_rhs, "assignment to '" + name_of(name) + "'");
             }
             return;
         }
@@ -234,6 +279,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
         declared.m_name = name;
         declared.m_binding_kind = BindingKind::Mutable;
         declared.m_span = lhs->m_span;
+        declared.m_static_type = infer_type(assign->m_rhs);
         if (const auto* lit = dynamic_cast<const StructLiteralExpr*>(assign->m_rhs)) {
             declared.m_type_name = nominal_name(lit->m_type);
         } else if (const auto* cast = dynamic_cast<const CastExpr*>(assign->m_rhs)) {
@@ -254,6 +300,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
     }
     check_expression(lhs);
     check_mutation_target(lhs, lhs->m_span);
+    check_assignable(infer_type(lhs), assign->m_rhs, "assignment");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -318,6 +365,19 @@ void TypeCheckerPass2::bind_arguments(const FunctionDeclNode* fn, const CallExpr
         }
     }
 
+    // Argument types are compared with the parameter types of non-generic callees only: the types of a
+    // generic callee mean something different once instantiated.
+    if (m_diag.error_count() == errors_before && fn->m_type_params.empty() && fn->m_owner_args.empty()) {
+        const ClassDeclNode* owner = fn->m_owner != INVALID_SYMBOL_ID ? m_pass0.find_class(fn->m_owner) : nullptr;
+        if (owner == nullptr || owner->m_type_params.empty()) {
+            for (size_t i = 0; i < params.size(); ++i) {
+                if (!filled[i]) continue;
+                check_assignable(static_type_of(params[i].m_type), call->m_args[source_of[i]].m_expr,
+                                 "argument '" + name_of(params[i].m_name) + "' of call to '" + std::string(display_name) + "'");
+            }
+        }
+    }
+
     // Only a call that bound cleanly has a canonical form; erroneous calls never reach later stages.
     if (m_diag.error_count() != errors_before || m_resolved_call_index.count(call) != 0) return;
     ResolvedCall resolved;
@@ -371,6 +431,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
         }
     } else if (const auto* member = dynamic_cast<const MemberExpr*>(call->m_callee)) {
         check_expression(member->m_object);
+        require_non_null(member->m_object, member->m_span);
         display = name_of(member->m_member);
         const auto* object = dynamic_cast<const IdentifierExpr*>(member->m_object);
         const SymbolBinding* binding = object != nullptr ? lookup(object->m_identifier) : nullptr;

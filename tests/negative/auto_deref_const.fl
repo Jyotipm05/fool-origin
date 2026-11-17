@@ -1,0 +1,27 @@
+// Member access looks through views, and the constness of the view still applies to every access.
+
+module tests::negative::auto_deref_const;
+
+class Vec2 {
+    x: i32;
+    y: i32;
+
+    fn scale(this &self, k: i32);
+}
+
+fn Vec2::scale(this &self, k: i32) {
+    self.x = self.x * k;
+}
+
+fn through_const_reference(v: const& Vec2) {
+    v.x = 1; // expect-error: cannot assign through 'v'
+    v.scale(2); // expect-error: cannot call 'Vec2::scale'
+}
+
+fn through_const_pointer(v: const* Vec2) {
+    v.y = 1; // expect-error: cannot assign through 'v'
+}
+
+fn unknown_member(v: *Vec2) -> i32 {
+    return v.z; // expect-error: 'Vec2' has no field 'z'
+}

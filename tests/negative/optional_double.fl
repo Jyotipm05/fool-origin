@@ -1,0 +1,7 @@
+// `T??` is rejected: an optional of an optional adds nothing.
+
+module tests::negative::optional_double;
+
+fn double_optional(a: i32??) { // expect-error: optional
+    return;
+}

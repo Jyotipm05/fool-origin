@@ -1,0 +1,8 @@
+call spawn_unit (22:5): x=arg0 y=arg1 team=arg2 hp=default
+call spawn_unit (23:5): x=arg2 y=arg1 team=arg0 hp=arg3
+call spawn_unit (24:5): x=arg0 y=arg1 team=arg2 hp=default
+call spawn_unit (25:5): x=arg0 y=arg1 team=arg2 hp=default
+call Squad::grow (26:5): self=receiver by=default times=arg0
+call Squad::grow (27:5): self=receiver by=arg0 times=arg1
+call spawn_unit (28:20): x=arg0 y=arg1 team=arg2 hp=default
+call spawn_unit (28:5): x=arg0 y=arg1 team=arg2 hp=default

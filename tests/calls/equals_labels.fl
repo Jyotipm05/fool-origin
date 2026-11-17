@@ -1,0 +1,30 @@
+// `name = value` labels an argument exactly like `name: value`: `spawn_unit(x = 10, y = 20, team = 1)`.
+// Expected output: equals_labels.expected
+
+module tests::calls::equals_labels;
+
+class Squad {
+    size: i32;
+
+    fn grow(this &self, by: i32 = 1, times: i32) -> i32;
+}
+
+fn Squad::grow(this &self, by: i32 = 1, times: i32) -> i32 {
+    return times;
+}
+
+fn spawn_unit(x: i32, y: i32, team: i32, hp: i32 = 100) -> i32 {
+    return hp;
+}
+
+fn caller() {
+    var squad = Squad { size: 0 };
+    spawn_unit(x = 10, y = 20, team = 1);
+    spawn_unit(team = 2, y = 5, x = 4, hp = 50);
+    spawn_unit(1, 2, team = 3);
+    spawn_unit(1, y: 2, team = 3);          // both spellings can be mixed
+    squad.grow(times = 4);
+    squad.grow(by = 2, times = 3);
+    spawn_unit(x = spawn_unit(x = 1, y = 2, team = 3), y = 0, team = 0);
+    return;
+}

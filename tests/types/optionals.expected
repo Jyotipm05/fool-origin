@@ -1,0 +1,15 @@
+12:12-16 null null
+16:26-33 call Entity?
+16:31-32 int integer literal
+17:23-24 int integer literal
+18:9-10 ident Entity?
+19:23-27 member i32
+19:23-24 ident Entity
+21:9-18 binary bool
+21:9-10 ident Entity?
+21:14-18 null null
+22:16-17 int integer literal
+24:12-24 binary i32
+24:12-16 member i32
+24:12-13 ident Entity
+24:19-24 ident i32

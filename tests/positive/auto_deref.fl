@@ -1,0 +1,48 @@
+// `.` reaches a member whether the left side is a value, a reference or a pointer, so changing a
+// variable from `T` to `&T` or `*T` does not touch the code that uses it.
+
+module tests::positive::auto_deref;
+
+class Vec2 {
+    x: i32;
+    y: i32;
+
+    fn length_sq(this const& self) -> i32;
+    fn scale(this &self, k: i32);
+}
+
+fn Vec2::length_sq(this const& self) -> i32 {
+    return self.x * self.x + self.y * self.y;
+}
+
+fn Vec2::scale(this &self, k: i32) {
+    self.x = self.x * k;
+    self.y = self.y * k;
+}
+
+fn by_value() -> i32 {
+    var v = Vec2 { x: 3, y: 4 };
+    v.x = 5;
+    v.scale(2);
+    return v.x + v.length_sq();
+}
+
+fn by_reference(v: &Vec2) -> i32 {
+    v.x = 5;
+    v.scale(2);
+    return v.x + v.length_sq();
+}
+
+fn by_const_reference(v: const& Vec2) -> i32 {
+    return v.x + v.length_sq();
+}
+
+fn by_pointer(v: *Vec2) -> i32 {
+    v.x = 5;
+    v.scale(2);
+    return v.x + v.length_sq();
+}
+
+fn by_const_pointer(v: const* Vec2) -> i32 {
+    return v.x + v.length_sq();
+}

@@ -323,7 +323,7 @@ public:
  * inferred (generics, calls into other modules, ...); checks that need it are skipped, never guessed.
  */
 struct StaticType {
-    enum class Kind : uint8_t { Unknown, Int, Float, Bool, Void, Pointer, Reference, Named };
+    enum class Kind : uint8_t { Unknown, Int, Float, Bool, Void, Pointer, Reference, Named, Optional, Null };
 
     // 1. Member variables
     Kind m_kind{Kind::Unknown};
@@ -332,12 +332,13 @@ struct StaticType {
     bool m_signed{false};
     bool m_literal{false};                  ///< Type of a literal: adapts to its context
     bool m_const{false};                    ///< Pointer/Reference: the pointee is read-only
-    std::shared_ptr<StaticType> m_pointee;  ///< Pointer/Reference target
+    std::shared_ptr<StaticType> m_pointee;  ///< Pointer/Reference target, or the wrapped type of an Optional
 
     // 2. Member functions
     [[nodiscard]] bool known() const { return m_kind != Kind::Unknown; }
     [[nodiscard]] bool is_numeric() const { return m_kind == Kind::Int || m_kind == Kind::Float; }
     [[nodiscard]] bool is_view() const { return m_kind == Kind::Pointer || m_kind == Kind::Reference; }
+    [[nodiscard]] bool is_optional() const { return m_kind == Kind::Optional; }
 };
 
 /**
@@ -355,6 +356,7 @@ struct SymbolBinding {
     bool m_is_moved{false};       ///< Tracked for destructive move invalidation
     std::optional<ConstValue> m_constant; ///< Value of a local `constx`; scoped (and shadowed) with the binding
     StaticType m_static_type;     ///< Inferred or declared type, for cast validation
+    bool m_narrowed{false};       ///< An optional that is known to hold a value at the current point of the flow
     SourceSpan m_span;
 
     // 2. Constructors in the MIDDLE
@@ -398,8 +400,11 @@ class TypeCheckerPass2 {
     const FunctionDeclNode* m_current_fn{nullptr};
     const ClassDeclNode* m_current_owner{nullptr};
     int m_loop_depth{0};
+    std::vector<SymbolID> m_narrow_log;   ///< names narrowed so far, undone in LIFO order when their scope ends
+    std::vector<size_t> m_narrow_marks;   ///< m_narrow_log size at the start of each open scope
     bool m_strict_names{false};
     bool m_warn_shadow{false};
+    std::unordered_map<const ExprNode*, StaticType> m_expr_types;     ///< inferred type of every expression checked
     std::vector<ResolvedCall> m_resolved_calls;                       ///< in the order the calls were checked
     std::unordered_map<const CallExpr*, size_t> m_resolved_call_index;
 
@@ -419,6 +424,11 @@ public:
     /// Calls whose arguments were bound without errors, with canonical slot order and defaults filled.
     [[nodiscard]] const std::vector<ResolvedCall>& resolved_calls() const { return m_resolved_calls; }
     [[nodiscard]] const ResolvedCall* find_resolved_call(const CallExpr* call) const;
+    /// Inferred type of every expression the checker visited (Unknown entries are kept: "could not tell").
+    [[nodiscard]] const std::unordered_map<const ExprNode*, StaticType>& expression_types() const { return m_expr_types; }
+    [[nodiscard]] const StaticType* type_of(const ExprNode* expr) const;
+    /// Source-like spelling of a type (`i32`, `const& Buffer`, `integer literal`).
+    [[nodiscard]] std::string type_text(const StaticType& type) const { return describe(type); }
 
 private:
     // scopes
@@ -444,13 +454,32 @@ private:
     void check_block_scoped(const BlockStmt* block);
     [[nodiscard]] bool always_returns(const std::vector<StmtNode*>& stmts) const;
     [[nodiscard]] bool stmt_always_returns(const StmtNode* stmt) const;
+    [[nodiscard]] bool stmt_always_exits(const StmtNode* stmt) const;   ///< returns, breaks, continues or calls a `-> !` function
+
+    // Optional types: flow narrowing (TypeCheckerOptional.cpp)
+    /// Names that are known to hold a value when `condition` evaluated to `when_true`.
+    void collect_narrowing(const ExprNode* condition, bool when_true, std::vector<SymbolID>& out);
+    void narrow(const std::vector<SymbolID>& names);
+    void unnarrow_to(size_t log_size);
+    void kill_narrowing(SymbolID name);
+    /// Forgets the narrowing of every optional variable the statement may assign or take the address of.
+    void kill_assigned_in(const StmtNode* stmt);
+    void kill_assigned_in(const ExprNode* expr);
+    void require_non_null(const ExprNode* object, SourceSpan span);
     [[nodiscard]] const ConditionalBranch* select_branch(const ConditionalStmt* stmt, bool report) const;
     [[nodiscard]] bool is_generic_parameter(SymbolID name) const;
     [[nodiscard]] const FunctionDeclNode* resolve_callee(const CallExpr* call) const;
 
     // Static types and named casts (TypeCheckerCasts.cpp)
     [[nodiscard]] StaticType static_type_of(const TypeNode* node) const;
-    [[nodiscard]] StaticType infer_type(const ExprNode* expr);
+    [[nodiscard]] StaticType infer_type(const ExprNode* expr);       ///< memoized in m_expr_types
+    [[nodiscard]] StaticType compute_type(const ExprNode* expr);
+    /// Reason `from` cannot be implicitly converted to `to`, or an empty string when it can (or when either is unknown).
+    [[nodiscard]] std::string conversion_error(const StaticType& to, const StaticType& from) const;
+    void check_assignable(const StaticType& to, const ExprNode* value, std::string_view what);
+    void check_condition(const ExprNode* condition, std::string_view what);
+    void check_operands(const BinaryExpr* binary);
+    [[nodiscard]] bool is_nominal(const StaticType& type) const;
     [[nodiscard]] std::optional<uint64_t> type_size(const StaticType& type, unsigned depth = 0) const;
     [[nodiscard]] std::optional<uint64_t> type_alignment(const StaticType& type, unsigned depth = 0) const;
     [[nodiscard]] std::string describe(const StaticType& type) const;

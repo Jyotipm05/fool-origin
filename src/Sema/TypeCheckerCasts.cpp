@@ -73,6 +73,8 @@ bool same_type(const StaticType& a, const StaticType& b) {
             if (a.m_literal || b.m_literal) return true; // an untyped literal adapts to the other side
             return a.m_bits == b.m_bits && a.m_signed == b.m_signed;
         case StaticType::Kind::Named: return a.m_name == b.m_name;
+        case StaticType::Kind::Optional:
+            return a.m_pointee && b.m_pointee && same_type(*a.m_pointee, *b.m_pointee);
         case StaticType::Kind::Pointer:
         case StaticType::Kind::Reference:
             return a.m_const == b.m_const && a.m_pointee && b.m_pointee && same_type(*a.m_pointee, *b.m_pointee);
@@ -90,6 +92,12 @@ bool is_pointee_void(const StaticType& view) { return view.m_pointee && view.m_p
 
 StaticType TypeCheckerPass2::static_type_of(const TypeNode* node) const {
     if (node == nullptr) return {};
+    if (node->m_kind == TypeNodeKind::Optional) {
+        StaticType optional;
+        optional.m_kind = StaticType::Kind::Optional;
+        optional.m_pointee = std::make_shared<StaticType>(static_type_of(node->m_inner));
+        return optional;
+    }
     if (node->m_kind == TypeNodeKind::Pointer || node->m_kind == TypeNodeKind::Reference) {
         return make_view(node->m_kind == TypeNodeKind::Pointer ? StaticType::Kind::Pointer : StaticType::Kind::Reference,
                          node->m_is_const, static_type_of(node->m_inner));
@@ -117,6 +125,19 @@ StaticType TypeCheckerPass2::static_type_of(const TypeNode* node) const {
 }
 
 StaticType TypeCheckerPass2::infer_type(const ExprNode* expr) {
+    if (expr == nullptr) return {};
+    if (auto it = m_expr_types.find(expr); it != m_expr_types.end()) return it->second;
+    StaticType type = compute_type(expr);
+    m_expr_types.emplace(expr, type);
+    return type;
+}
+
+const StaticType* TypeCheckerPass2::type_of(const ExprNode* expr) const {
+    auto it = m_expr_types.find(expr);
+    return it == m_expr_types.end() ? nullptr : &it->second;
+}
+
+StaticType TypeCheckerPass2::compute_type(const ExprNode* expr) {
     using Kind = StaticType::Kind;
     if (expr == nullptr) return {};
 
@@ -138,8 +159,19 @@ StaticType TypeCheckerPass2::infer_type(const ExprNode* expr) {
         type.m_bits = 8;
         return type;
     }
+    if (dynamic_cast<const NullLiteralExpr*>(expr) != nullptr) {
+        StaticType type;
+        type.m_kind = Kind::Null;
+        return type;
+    }
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(expr)) {
-        if (const SymbolBinding* binding = lookup(id->m_identifier)) return binding->m_static_type;
+        if (const SymbolBinding* binding = lookup(id->m_identifier)) {
+            // Where the flow analysis proved the optional holds a value, it is used as the plain type.
+            if (binding->m_narrowed && binding->m_static_type.is_optional() && binding->m_static_type.m_pointee) {
+                return *binding->m_static_type.m_pointee;
+            }
+            return binding->m_static_type;
+        }
         if (const VarDeclNode* global = m_pass0.find_global(id->m_identifier)) return static_type_of(global->m_type);
         return {};
     }
@@ -152,6 +184,9 @@ StaticType TypeCheckerPass2::infer_type(const ExprNode* expr) {
             case TokenKind::Star:
                 return (operand.is_view() && operand.m_pointee) ? *operand.m_pointee : StaticType{};
             case TokenKind::Bang: {
+                // `!` is logical not on a bool and bitwise complement on an integer (the stdlib relies on it).
+                if (operand.m_kind == Kind::Int) return operand;
+                if (operand.m_kind != Kind::Bool) return {};
                 StaticType type;
                 type.m_kind = Kind::Bool;
                 type.m_bits = 8;
@@ -167,12 +202,18 @@ StaticType TypeCheckerPass2::infer_type(const ExprNode* expr) {
             case TokenKind::Minus:
             case TokenKind::Star:
             case TokenKind::Slash:
-            case TokenKind::Percent: {
+            case TokenKind::Percent:
+            case TokenKind::Ampersand:
+            case TokenKind::Pipe:
+            case TokenKind::Caret: {
                 StaticType lhs = infer_type(binary->m_lhs);
                 StaticType rhs = infer_type(binary->m_rhs);
-                if (lhs.is_numeric() && !lhs.m_literal) return lhs;
-                if (rhs.is_numeric() && !rhs.m_literal) return rhs;
-                return (lhs.is_numeric() && rhs.is_numeric()) ? lhs : StaticType{};
+                if (!lhs.is_numeric() || !rhs.is_numeric()) return {};
+                if (lhs.m_literal && rhs.m_literal) return lhs.m_kind == Kind::Float ? lhs : rhs.m_kind == Kind::Float ? rhs : lhs;
+                if (lhs.m_literal) return rhs;
+                if (rhs.m_literal) return lhs;
+                // Both typed: the operand the other converts to (the wider one); mismatches are reported by check_operands.
+                return conversion_error(lhs, rhs).empty() ? lhs : rhs;
             }
             case TokenKind::EqualEqual:
             case TokenKind::ExclaimEqual:
@@ -271,6 +312,8 @@ std::string TypeCheckerPass2::describe(const StaticType& type) const {
         case StaticType::Kind::Bool: return "bool";
         case StaticType::Kind::Void: return "void";
         case StaticType::Kind::Named: return std::string(text_of(type.m_name));
+        case StaticType::Kind::Null: return "null";
+        case StaticType::Kind::Optional: return (type.m_pointee ? describe(*type.m_pointee) : "?") + "?";
         case StaticType::Kind::Pointer:
         case StaticType::Kind::Reference: {
             std::string text = type.m_kind == StaticType::Kind::Pointer ? "*" : "&";
@@ -278,6 +321,187 @@ std::string TypeCheckerPass2::describe(const StaticType& type) const {
             return text + (type.m_pointee ? describe(*type.m_pointee) : "?");
         }
         default: return "<unknown>";
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Implicit conversions and operand rules
+// ---------------------------------------------------------------------------------------------
+//
+// Only lossless conversions happen implicitly: an integer widens to a wider integer of the same signedness
+// (or an unsigned one to a strictly wider signed one), `f32` widens to `f64`, a literal adapts to the type
+// it is used as, `&T`/`*T` interconvert, and `const` may be added to a view. Everything else needs
+// `@static_cast` / `@bit_cast` / ... . Types that are unknown (generics, foreign names, ...) are never
+// reported: a missed error is acceptable, a wrong one is not.
+
+bool TypeCheckerPass2::is_nominal(const StaticType& type) const {
+    return type.m_kind == StaticType::Kind::Named &&
+           (m_pass0.find_class(type.m_name) != nullptr || m_pass0.find_ruleset(type.m_name) != nullptr ||
+            m_pass0.find_enum(type.m_name) != nullptr);
+}
+
+std::string TypeCheckerPass2::conversion_error(const StaticType& to, const StaticType& from) const {
+    using Kind = StaticType::Kind;
+    if (!to.known() || !from.known()) return {};
+    if (to.m_kind == Kind::Named && !is_nominal(to)) return {};
+    if (from.m_kind == Kind::Named && !is_nominal(from)) return {};
+
+    const std::string base = "cannot convert '" + describe(from) + "' to '" + describe(to) + "'";
+    const std::string numeric_hint = "; use @static_cast<" + describe(to) + ">(...) to convert explicitly";
+
+    if (from.m_kind == Kind::Void) return to.m_kind == Kind::Void ? std::string{} : "a void value cannot be used as '" + describe(to) + "'";
+    if (to.m_kind == Kind::Optional) {
+        // `null` and any `U` that converts to `T` become a `T?`; `U?` converts to `T?` when `U` converts to `T`.
+        if (from.m_kind == Kind::Null || !to.m_pointee) return {};
+        if (from.m_kind == Kind::Optional) {
+            if (!from.m_pointee || conversion_error(*to.m_pointee, *from.m_pointee).empty()) return {};
+            return base;
+        }
+        return conversion_error(*to.m_pointee, from).empty() ? std::string{} : base;
+    }
+    if (from.m_kind == Kind::Null) {
+        return to.m_kind == Kind::Void ? std::string{}
+                                       : "cannot use 'null' as '" + describe(to) + "': only an optional type can hold null; declare it as '" + describe(to) + "?'";
+    }
+    if (from.m_kind == Kind::Optional && to.m_kind != Kind::Void) {
+        return base + ": it may be null; check it first, e.g. 'if (x) { ... }'";
+    }
+    switch (to.m_kind) {
+        case Kind::Void: return {};
+        case Kind::Bool:
+            if (from.m_kind == Kind::Bool) return {};
+            return base + (from.is_numeric() ? "; compare explicitly, e.g. 'x != 0'" : "");
+        case Kind::Int: {
+            if (from.m_kind != Kind::Int) return base + (from.m_kind == Kind::Float || from.m_kind == Kind::Bool ? numeric_hint : "");
+            if (from.m_literal || to.m_literal) return {};
+            if (from.m_signed == to.m_signed && from.m_bits <= to.m_bits) return {};
+            if (!from.m_signed && to.m_signed && from.m_bits < to.m_bits) return {};
+            return base + numeric_hint;
+        }
+        case Kind::Float: {
+            if (from.m_kind == Kind::Float) {
+                if (from.m_literal || to.m_literal || to.m_bits >= from.m_bits) return {};
+                return base + numeric_hint;
+            }
+            if (from.m_kind == Kind::Int && from.m_literal) return {};
+            return base + (from.m_kind == Kind::Int || from.m_kind == Kind::Bool ? numeric_hint : "");
+        }
+        case Kind::Pointer:
+        case Kind::Reference: {
+            if (!from.is_view()) return base + (from.m_kind == Kind::Int ? "; use @reinterpret_cast to turn an address into a pointer" : "");
+            if (from.m_const && !to.m_const) return base + " (discards const)";
+            const StaticType* a = to.m_pointee.get();
+            const StaticType* b = from.m_pointee.get();
+            // Pointees are only compared when both are primitive: a named pointee may be a ruleset the other implements.
+            const auto primitive = [](const StaticType* t) { return t != nullptr && t->known() && t->m_kind != Kind::Named && t->m_kind != Kind::Void; };
+            if (primitive(a) && primitive(b) && !same_type(*a, *b)) return base + "; use @reinterpret_cast to change the pointee type";
+            return {};
+        }
+        case Kind::Named: {
+            if (from.m_kind != Kind::Named) return base;
+            if (from.m_name == to.m_name) return {};
+            // Distinct classes never convert; rulesets and enums may relate through conformance, so they are not judged.
+            if (m_pass0.find_class(to.m_name) != nullptr && m_pass0.find_class(from.m_name) != nullptr) return base;
+            return {};
+        }
+        default: return {};
+    }
+}
+
+void TypeCheckerPass2::check_assignable(const StaticType& to, const ExprNode* value, std::string_view what) {
+    if (value == nullptr || !to.known()) return;
+    const std::string reason = conversion_error(to, infer_type(value));
+    if (!reason.empty()) m_diag.error(value->m_span, reason + " in " + std::string(what));
+}
+
+void TypeCheckerPass2::check_condition(const ExprNode* condition, std::string_view what) {
+    using Kind = StaticType::Kind;
+    if (condition == nullptr) return;
+    const StaticType type = infer_type(condition);
+    if (!type.known() || type.m_kind == Kind::Bool || type.is_view() || type.is_optional() || (type.m_kind == Kind::Named && !is_nominal(type))) return;
+    m_diag.error(condition->m_span, "the condition of '" + std::string(what) + "' must be 'bool', found '" + describe(type) +
+                                    "'" + (type.is_numeric() ? "; compare explicitly, e.g. 'x != 0'" : ""));
+}
+
+void TypeCheckerPass2::check_operands(const BinaryExpr* binary) {
+    using Kind = StaticType::Kind;
+    const TokenKind op = binary->m_op;
+    const bool arithmetic = op == TokenKind::Plus || op == TokenKind::Minus || op == TokenKind::Star ||
+                            op == TokenKind::Slash || op == TokenKind::Percent;
+    const bool equality = op == TokenKind::EqualEqual || op == TokenKind::ExclaimEqual;
+    const bool ordering = op == TokenKind::Less || op == TokenKind::LessEqual || op == TokenKind::Greater ||
+                          op == TokenKind::GreaterEqual;
+    const bool logical = op == TokenKind::AmpAmp || op == TokenKind::PipePipe;
+    if (!arithmetic && !equality && !ordering && !logical) return;
+
+    const StaticType lhs = infer_type(binary->m_lhs);
+    const StaticType rhs = infer_type(binary->m_rhs);
+    if (!lhs.known() || !rhs.known()) return;
+
+    // Optionals: only `x == null` / `x != null` (and truthiness in `&&` / `||`) are meaningful.
+    if (lhs.m_kind == Kind::Null || rhs.m_kind == Kind::Null || lhs.is_optional() || rhs.is_optional()) {
+        const auto text = [&] {
+            switch (op) {
+                case TokenKind::Plus: return "+"; case TokenKind::Minus: return "-"; case TokenKind::Star: return "*";
+                case TokenKind::Slash: return "/"; case TokenKind::Percent: return "%"; case TokenKind::EqualEqual: return "==";
+                case TokenKind::ExclaimEqual: return "!="; case TokenKind::Less: return "<"; case TokenKind::LessEqual: return "<=";
+                case TokenKind::Greater: return ">"; case TokenKind::GreaterEqual: return ">="; case TokenKind::AmpAmp: return "&&";
+                default: return "||";
+            }
+        }();
+        if (logical) {
+            for (const auto& [operand, node] : {std::pair{&lhs, binary->m_lhs}, std::pair{&rhs, binary->m_rhs}}) {
+                if (operand->m_kind == Kind::Null) m_diag.error(node->m_span, "operand of '" + std::string(text) + "' cannot be 'null'");
+            }
+            return;
+        }
+        const bool lhs_null = lhs.m_kind == Kind::Null;
+        const bool rhs_null = rhs.m_kind == Kind::Null;
+        if (equality && (lhs_null != rhs_null)) {
+            const StaticType& other = lhs_null ? rhs : lhs;
+            if (!other.is_optional()) {
+                m_diag.error(binary->m_span, "cannot compare '" + describe(other) + "' with 'null': it is not an optional type, so it is never null");
+            }
+            return;
+        }
+        if (equality && lhs_null && rhs_null) return;
+        m_diag.error(binary->m_span, "operator '" + std::string(text) + "' cannot be applied to '" + describe(lhs) + "' and '" +
+                                     describe(rhs) + "'" +
+                                     (equality ? "; compare with 'null', or check the value with 'if (x)' and compare the plain value"
+                                               : "; check the optional with 'if (x)' first"));
+        return;
+    }
+    const auto judged = [&](const StaticType& t) { return t.m_kind == Kind::Int || t.m_kind == Kind::Float || t.m_kind == Kind::Bool; };
+    if (!judged(lhs) || !judged(rhs)) return; // views, classes and the like: operators on them are not modelled
+
+    const std::string symbol = [&] {
+        switch (op) {
+            case TokenKind::Plus: return "+"; case TokenKind::Minus: return "-"; case TokenKind::Star: return "*";
+            case TokenKind::Slash: return "/"; case TokenKind::Percent: return "%"; case TokenKind::EqualEqual: return "==";
+            case TokenKind::ExclaimEqual: return "!="; case TokenKind::Less: return "<"; case TokenKind::LessEqual: return "<=";
+            case TokenKind::Greater: return ">"; case TokenKind::GreaterEqual: return ">="; case TokenKind::AmpAmp: return "&&";
+            default: return "||";
+        }
+    }();
+
+    if (logical) {
+        for (const auto& [operand, node] : {std::pair{&lhs, binary->m_lhs}, std::pair{&rhs, binary->m_rhs}}) {
+            if (operand->m_kind != Kind::Bool) {
+                m_diag.error(node->m_span, "operand of '" + symbol + "' must be 'bool', found '" + describe(*operand) + "'");
+            }
+        }
+        return;
+    }
+    if (lhs.m_kind == Kind::Bool || rhs.m_kind == Kind::Bool) {
+        if (equality && lhs.m_kind == Kind::Bool && rhs.m_kind == Kind::Bool) return;
+        m_diag.error(binary->m_span, "operator '" + symbol + "' cannot be applied to '" + describe(lhs) + "' and '" +
+                                     describe(rhs) + "'");
+        return;
+    }
+    // Both numeric: one side must convert to the other without loss (literals adapt).
+    if (!conversion_error(lhs, rhs).empty() && !conversion_error(rhs, lhs).empty()) {
+        m_diag.error(binary->m_span, "mismatched operand types for '" + symbol + "': '" + describe(lhs) + "' and '" +
+                                     describe(rhs) + "'; convert one side with @static_cast");
     }
 }
 
@@ -297,7 +521,7 @@ bool int_value_fits(int64_t value, unsigned bits, bool is_signed) {
 
 void TypeCheckerPass2::check_named_cast(const CastExpr* cast) {
     using Kind = StaticType::Kind;
-    const StaticType target = static_type_of(cast->m_target);
+    StaticType target = static_type_of(cast->m_target);
     const StaticType source = infer_type(cast->m_operand);
     const SourceSpan span = cast->m_span;
     const unsigned pointer_bits = m_pass0.target().m_pointer_width;
@@ -315,6 +539,20 @@ void TypeCheckerPass2::check_named_cast(const CastExpr* cast) {
 
     if (cast->m_target != nullptr && cast->m_target->m_kind == TypeNodeKind::Never) {
         fail(name + " can not target the never type '!'");
+        return;
+    }
+    // `@dynamic_cast<*T?>(p)` states that the result may be null; every other cast works on plain values.
+    if (target.is_optional()) {
+        if (cast->m_cast_kind != CastKind::Dynamic) {
+            fail(name + " can not produce the optional type '" + describe(target) + "'; cast to '" +
+                 (target.m_pointee ? describe(*target.m_pointee) : std::string("T")) + "' and let it convert implicitly");
+            return;
+        }
+        if (target.m_pointee) target = *target.m_pointee;
+    }
+    if (source.is_optional() || source.m_kind == Kind::Null) {
+        fail(name + " can not convert '" + describe(source) + "'; " +
+             (source.is_optional() ? "check it first with 'if (x)' so it is a plain value" : "'null' has no representation to cast"));
         return;
     }
 

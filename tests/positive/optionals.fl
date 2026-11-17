@@ -1,0 +1,141 @@
+// Optional types: `T?`, `null`, and narrowing by checks.
+
+module tests::positive::optionals;
+
+class Entity {
+    id: i32;
+    next: Entity?;
+}
+
+fn update(e: &Entity) {
+    return;
+}
+
+fn find(id: i32) -> Entity? {
+    return null;
+}
+
+fn make() -> Entity? {
+    return Entity { id: 1 };          // `next` is optional and defaults to null
+}
+
+fn plain(e: Entity) {
+    return;
+}
+
+fn check_then(a: Entity?) {
+    if (a) {
+        update(&a);
+        var id: i32 = a.id;
+    }
+}
+
+fn null_compare(a: Entity?) {
+    if (a != null) {
+        var id: i32 = a.id;
+    }
+    if (null != a) {
+        var id: i32 = a.id;
+    }
+    if (a == null) {
+        return;
+    } else {
+        var id: i32 = a.id;
+    }
+}
+
+fn early_exit(a: Entity?) -> i32 {
+    if (a == null) {
+        return 0;
+    }
+    return a.id;                       // narrowed for the rest of the block
+}
+
+fn negation(a: Entity?) -> i32 {
+    if (!a) {
+        return 0;
+    }
+    return a.id;
+}
+
+fn short_circuit(a: Entity?, b: Entity?) -> bool {
+    if (a && b) {
+        var sum: i32 = a.id + b.id;
+    }
+    if (a != null && a.id > 3) {
+        return true;
+    }
+    if (a == null || a.id < 0) {
+        return false;
+    }
+    return a.id == 0;
+}
+
+fn either(a: Entity?, b: Entity?) -> i32 {
+    if (a == null || b == null) {
+        return 0;
+    }
+    return a.id + b.id;
+}
+
+fn loops(head: Entity?) -> i32 {
+    var total: i32 = 0;
+    var cur: Entity? = head;
+    while (cur) {
+        total = total + cur.id;
+        cur = cur.next;                // the assignment forgets the narrowing; the loop condition restores it
+    }
+    return total;
+}
+
+fn from_plain() -> i32 {
+    var e: Entity? = Entity { id: 7 };  // initialised with a value: usable at once
+    return e.id;
+}
+
+fn assign_value(flag: bool) -> i32 {
+    var e: Entity? = null;
+    if (flag) {
+        e = Entity { id: 2 };
+        return e.id;
+    }
+    return 0;
+}
+
+fn conversions(e: Entity) {
+    var a: Entity? = e;                // T converts to T?
+    var b: Entity? = null;
+    var n: i32? = 5;
+    var m: i64? = n;                   // i32? widens to i64?
+    plain(e);
+    var p: *i32? = null;               // a nullable pointer
+}
+
+fn use_calls() {
+    var found: Entity? = find(1);
+    if (found) {
+        update(&found);
+    }
+    var maybe: Entity? = make();
+    if (maybe == null) {
+        return;
+    }
+    plain(maybe);
+}
+
+ruleset Shape {
+    fn area(this const& self) -> i32;
+}
+
+class Square {
+    side: i32;
+}
+
+fn downcast(s: &Shape) -> i32 {
+    var maybe: *Square? = @dynamic_cast<*Square?>(s);   // the result may be null, so say so
+    var declared: Entity?;                               // no initializer: starts out null
+    if (declared) {
+        return declared.id;
+    }
+    return 0;
+}

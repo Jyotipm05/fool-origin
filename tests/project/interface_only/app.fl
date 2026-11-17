@@ -1,0 +1,10 @@
+module tests::app;
+
+#import tests::geometry;
+
+fn run() -> i32 {
+    var a = geometry::Vec2 { x: 1, y: 2 };
+    var b = geometry::Vec2 { x: 3, y: 4 };
+    var d = geometry::dot(&a, &b, scale: 2);
+    return d + a.length_squared();
+}

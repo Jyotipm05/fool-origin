@@ -1,0 +1,9 @@
+module tests::app;
+
+#import tests::geometry;
+
+fn run() -> i32 {
+    var a = geometry::Vec2 { x: 1, y: 2 };
+    var wide: i64 = 7;
+    return geometry::dot(&a, &a, scale: wide);
+}

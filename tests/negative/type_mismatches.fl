@@ -1,0 +1,61 @@
+// Implicit conversions are lossless only; everything else needs an explicit cast.
+
+module tests::negative::type_mismatches;
+
+class Point {
+    x: i32;
+    y: i32;
+}
+
+class Other {
+    z: i32;
+}
+
+fn takes_u8(v: u8) {
+    return;
+}
+
+fn takes_point(p: Point) {
+    return;
+}
+
+fn mismatches() -> i32 {
+    var n: i32 = 1;
+    var wide: i64 = 1;
+    var unsigned_value: u32 = 1;
+    var small: f32 = 1.5;
+    var big: f64 = 2.5;
+    var flag: bool = true;
+
+    var from_float_literal: i32 = 1.5; // expect-error: cannot initialize variable of type 'i32' with a floating-point value
+    var from_int_literal: bool = 1; // expect-error: cannot initialize variable of type 'bool' with a non-boolean value
+    var narrowed: i32 = wide; // expect-error: cannot convert 'i64' to 'i32'
+    var sign_changed: i32 = unsigned_value; // expect-error: cannot convert 'u32' to 'i32'
+    var narrowed_float: f32 = big; // expect-error: cannot convert 'f64' to 'f32'
+    var int_to_float: f32 = n; // expect-error: cannot convert 'i32' to 'f32'
+    var other_class: Point = Other { z: 1 }; // expect-error: cannot convert 'Other' to 'Point'
+
+    n = small; // expect-error: in assignment to 'n'
+    takes_u8(wide); // expect-error: in argument 'v' of call to 'takes_u8'
+    takes_point(Other { z: 2 }); // expect-error: in argument 'p' of call to 'takes_point'
+    var made: Point = Point { x: 1.5, y: 2 }; // expect-error: in initializer of field 'x'
+
+    if (n) { // expect-error: the condition of 'if' must be 'bool', found 'i32'
+        n = 2;
+    }
+    while (small) { // expect-error: the condition of 'while' must be 'bool', found 'f32'
+        n = 3;
+    }
+
+    var mixed = n + small; // expect-error: mismatched operand types for '+': 'i32' and 'f32'
+    var flag_sum = flag + 1; // expect-error: operator '+' cannot be applied to 'bool' and 'integer literal'
+    var logic = n && flag; // expect-error: operand of '&&' must be 'bool', found 'i32'
+    var compared = wide == small; // expect-error: mismatched operand types for '==': 'i64' and 'f32'
+
+    var address: *i32 = &n;
+    var wrong_pointee: *u8 = address; // expect-error: use @reinterpret_cast to change the pointee type
+    var read_only: const* i32 = address;
+    var writable: *i32 = read_only; // expect-error: (discards const)
+
+    return small; // expect-error: cannot convert 'f32' to 'i32'
+}

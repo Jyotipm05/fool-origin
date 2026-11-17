@@ -1,0 +1,130 @@
+// Using an optional where a value is needed, and everything the narrowing rules refuse.
+
+module tests::negative::optionals_invalid;
+
+class Entity {
+    id: i32;
+    next: Entity?;
+}
+
+fn find() -> Entity? {
+    return null;
+}
+
+fn plain(e: Entity) {
+    return;
+}
+
+fn takes_i32(v: i32) {
+    return;
+}
+
+fn unchecked_access(a: Entity?) -> i32 {
+    var id: i32 = a.id; // expect-error: 'a' may be null: check it first with 'if (a)'
+    return id;
+}
+
+fn unchecked_deref(p: *i32?) -> i32 {
+    return *p; // expect-error: 'p' may be null
+}
+
+fn call_result() -> i32 {
+    return find().id; // expect-error: may be null: store it in a variable
+}
+
+fn pass_optional(a: Entity?) {
+    plain(a); // expect-error: cannot convert 'Entity?' to 'Entity'
+}
+
+fn null_into_value() {
+    var e: Entity = null; // expect-error: cannot use 'null' as 'Entity'
+    takes_i32(null); // expect-error: cannot use 'null' as 'i32'
+}
+
+fn infer_null() {
+    var x = null; // expect-error: cannot infer the type of 'x' from 'null'
+}
+
+fn wrong_branch(a: Entity?) -> i32 {
+    if (a == null) {
+        return a.id; // expect-error: 'a' may be null
+    }
+    return 1;
+}
+
+fn after_positive_check(a: Entity?) -> i32 {
+    if (a) {
+        return 1;
+    }
+    return a.id; // expect-error: 'a' may be null
+}
+
+fn or_does_not_narrow(a: Entity?) -> i32 {
+    if (a || true) {
+        return a.id; // expect-error: 'a' may be null
+    }
+    return 0;
+}
+
+fn killed_by_assignment(a: Entity?) -> i32 {
+    if (a) {
+        a = null;
+        return a.id; // expect-error: 'a' may be null
+    }
+    return 0;
+}
+
+fn narrowing_ends_with_block(a: Entity?, c: bool) -> i32 {
+    if (c) {
+        if (!a) {
+            return 0;
+        }
+        takes_i32(a.id);
+    }
+    return a.id; // expect-error: 'a' may be null
+}
+
+fn loop_assigns(a: Entity?, c: bool) -> i32 {
+    if (a) {
+        while (c) {
+            takes_i32(a.id); // expect-error: 'a' may be null
+            a = null;
+        }
+    }
+    return 0;
+}
+
+fn fields_are_not_narrowed(a: Entity) -> i32 {
+    if (a.next) {
+        return a.next.id; // expect-error: may be null
+    }
+    return 0;
+}
+
+fn operators(a: Entity?, n: i32?) {
+    var sum: i32 = n + 1; // expect-error: operator '+' cannot be applied to 'i32?'
+    var less: bool = n < 3; // expect-error: operator '<' cannot be applied to 'i32?'
+    var same: bool = n == 3; // expect-error: operator '==' cannot be applied to 'i32?'
+    var never: bool = 3 == null; // expect-error: cannot compare 'integer literal' with 'null'
+    var order: bool = a < null; // expect-error: operator '<' cannot be applied
+}
+
+fn conditions(n: i32, a: Entity?) {
+    if (n) { // expect-error: the condition of 'if' must be 'bool'
+        return;
+    }
+    var flag: bool = a; // expect-error: cannot convert 'Entity?' to 'bool'
+}
+
+fn casts(a: Entity?, p: *i32) {
+    var wide: i64 = @static_cast<i64>(a); // expect-error: can not convert 'Entity?'
+    var opt: i64? = @static_cast<i64?>(1); // expect-error: can not produce the optional type
+}
+
+fn returns() -> i32 {
+    return null; // expect-error: cannot use 'null' as 'i32'
+}
+
+fn return_optional(a: Entity?) -> Entity {
+    return a; // expect-error: cannot convert 'Entity?' to 'Entity'
+}

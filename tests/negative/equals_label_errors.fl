@@ -1,0 +1,16 @@
+// A `name = value` argument is a label, never an assignment: it is bound by name and checked like `name: value`.
+
+module tests::negative::equals_label_errors;
+
+fn spawn_unit(x: i32, y: i32, team: i32, hp: i32 = 100) -> i32 {
+    return team;
+}
+
+fn caller() {
+    var x: i32 = 0;
+    spawn_unit(x = 1, y = 2, team = 3, squad = 4); // expect-error: has no parameter named 'squad'
+    spawn_unit(x = 1, x = 2, y = 3, team = 4); // expect-error: multiple values for parameter 'x'
+    spawn_unit(x = 1, y = 2, team = 3, 4); // expect-error: positional argument cannot follow a named argument
+    spawn_unit(x = 1, y = 2); // expect-error: missing argument
+    spawn_unit(x = 1.5, y = 2, team = 3); // expect-error: cannot convert
+}

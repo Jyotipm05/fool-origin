@@ -1,0 +1,25 @@
+// Types the checker records for optional expressions: `T?`, `null`, and a narrowed variable read as plain `T`.
+// Expected output: optionals.expected
+
+module tests::types::optionals;
+
+class Entity {
+    id: i32;
+    next: Entity?;
+}
+
+fn find(id: i32) -> Entity? {
+    return null;
+}
+
+fn sample(a: Entity?) -> i32 {
+    var found: Entity? = find(1);
+    var plain: i32? = 4;
+    if (a) {
+        var id: i32 = a.id;
+    }
+    if (a == null) {
+        return 0;
+    }
+    return a.id + plain;
+}

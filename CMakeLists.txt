@@ -32,6 +32,7 @@ add_executable(foolc
         src/Sema/TypeChecker.cpp
         src/Sema/TypeCheckerExpr.cpp
         src/Sema/TypeCheckerCasts.cpp
+        src/Sema/TypeCheckerOptional.cpp
         src/Sema/BorrowChecker.cpp
         src/Module/Sha256.cpp
         src/Module/BMICodec.cpp
@@ -113,6 +114,10 @@ if (BUILD_TESTING)
     add_project_test(foolc_project_cycle cycle "circular module dependency" "project;negative")
     add_project_test(foolc_project_unresolved unresolved "unresolved import" "project;negative")
     add_project_test(foolc_project_bad_template bad_template "has no template parameter" "project;negative")
+    # An interface (.fo) without an implementation file (.fl) is valid; calls across the import are still type-checked.
+    add_project_test(foolc_project_interface_only interface_only "2 module.s. from 2 file.s.*, 0 error" "project;positive")
+    add_project_test(foolc_project_import_type_mismatch import_type_mismatch
+                     "cannot convert 'i64' to 'i32'.*argument 'scale' of call to 'geometry::dot'" "project;negative")
 
     # 3. Per-file parse + local checks for every example and stdlib file.
     file(GLOB_RECURSE FOOL_SOURCE_FILES
@@ -241,6 +246,26 @@ if (BUILD_TESTING)
                          -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/calls/${CALL_NAME}.expected
                          -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
         set_tests_properties("foolc_calls_${CALL_NAME}_roundtrip" PROPERTIES LABELS "calls;bmi")
+    endforeach()
+    # 11. Expression types (`--dump-types`), same golden-file mechanism.
+    file(GLOB FOOL_TYPE_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/types/*.fl")
+    foreach(TYPE_FILE ${FOOL_TYPE_FILES})
+        get_filename_component(TYPE_NAME "${TYPE_FILE}" NAME_WE)
+        foreach(VARIANT plain roundtrip)
+            set(EXTRA_FLAG "")
+            set(TEST_SUFFIX "")
+            set(TEST_LABELS "types")
+            if(VARIANT STREQUAL "roundtrip")
+                set(EXTRA_FLAG "--bmi-roundtrip")
+                set(TEST_SUFFIX "_roundtrip")
+                set(TEST_LABELS "types;bmi")
+            endif()
+            add_test(NAME "foolc_types_${TYPE_NAME}${TEST_SUFFIX}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${TYPE_FILE} -DFLAG=--dump-types
+                             -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/types/${TYPE_NAME}.expected
+                             -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+            set_tests_properties("foolc_types_${TYPE_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
+        endforeach()
     endforeach()
     add_test(NAME foolc_calls_project
              COMMAND foolc --project --dump-calls -I stdlib -I examples
