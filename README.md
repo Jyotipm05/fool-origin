@@ -10,6 +10,7 @@
   - [1. File Triad Architecture (.fo / .fl / .fex)](#1-file-triad-architecture-fo--fl--fex)
   - [2. Mutability & Reference Model](#2-mutability--reference-model)
   - [2d. Optional Types (`T?`)](#2d-optional-types-t)
+  - [2f. Lambdas, Function Types and Explicit Captures](#2f-lambdas-function-types-and-explicit-captures)
   - [3. Explicit Receivers](#3-explicit-receivers)
   - [4. Middle & Trailing Parameter Defaults](#4-middle--trailing-parameter-defaults)
   - [5. Nominal Capability Rulesets & Blueprints](#5-nominal-capability-rulesets--blueprints)
@@ -174,6 +175,48 @@ fn tick(a: Entity?) {
 
 `.` reaches a member whether the left side is a value, a reference or a pointer, so `p.x` keeps working when a
 variable changes from `T` to `&T` or `*T`. The constness of the view still applies (`const& T` is read-only).
+
+### 2f. Lambdas, Function Types and Explicit Captures
+
+Functions and lambdas share one syntax, `(params) -> result { body }`; giving it a name declares a function:
+
+```fool
+double_it = (x: i32) -> i32 { return x * 2; };           // module level: same as `fn double_it(x: i32) -> i32 { ... }`
+
+fn demo() {
+    twice = (x: i32) -> i32 { return x * 2; };            // inside a function: a variable holding a lambda
+    twice(3);  twice(x = 3);                              // parameter names (and defaults) work like a function's
+    var f: fn(i32) -> i32 = twice;                        // `fn(A, B) -> R` is the type of a function value
+}
+```
+
+A lambda has no access to the code around it unless it says so. Its body can use its parameters, its own
+locals, the variables in its capture list, and program-wide functions, types and constants (including immutable
+`const` / `constx` globals). Any other variable of the enclosing code, and any mutable global, is a compile
+error that names the variable and suggests the capture list:
+
+```fool
+fn scale(factor: i32) -> i32 {
+    var total: i32 = 0;
+    add = (n: i32) -> i32 capture=[total, factor] { total = total + n * factor; return total; };
+
+    // A block after a call is a lambda with no parameters, passed as the last argument:
+    thread_task(capture=[data1, data2]) {
+        // only data1, data2, locals, constants and functions can be named here
+    }
+}
+```
+
+- Captured variables are shared with the enclosing code (captured by reference) and keep their type, constness
+  and moved state. An optional is not narrowed inside the lambda: check it again there.
+- `capture=[...]` must be followed by a block when written on a call. A function declaration (`name = (...) { }`)
+  cannot capture. A call that ends in a block needs no `;`.
+- `thread_task` is an ordinary function whose last parameter has a function type, e.g. `fn thread_task(task: fn())`.
+- Calls through a variable that still holds its lambda use that lambda's parameter names; through any other
+  function value (a parameter, a field) they are positional and checked against its `fn(...)` type.
+- The guarantee covers names written in the body: what a *called* function does with other globals is not tracked.
+- Lambda bodies are borrow-checked like functions (`--check-borrow`). Holding a borrow for as long as the lambda lives
+  is not modelled yet, and there is no code generation for lambdas yet.
 
 ---
 
@@ -385,6 +428,7 @@ is a HIR decision that is not made yet.
 | BMI cache (`.flbmi`): SHA-256 keyed parse-tree cache (`--cache`) | Implemented (see below) |
 | Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented (`name: v` and `name = v` labels) |
 | Optional types `T?`, `null`, flow narrowing | Implemented (front end, checks and cache; no code generation yet) |
+| Lambdas, `fn(...)` types, trailing blocks, explicit `capture=[...]` | Implemented (front end, checks and cache; no code generation yet) |
 | HIR/MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.

@@ -33,6 +33,7 @@ add_executable(foolc
         src/Sema/TypeCheckerExpr.cpp
         src/Sema/TypeCheckerCasts.cpp
         src/Sema/TypeCheckerOptional.cpp
+        src/Sema/TypeCheckerLambda.cpp
         src/Sema/BorrowChecker.cpp
         src/Module/Sha256.cpp
         src/Module/BMICodec.cpp

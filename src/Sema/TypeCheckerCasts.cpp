@@ -75,6 +75,14 @@ bool same_type(const StaticType& a, const StaticType& b) {
         case StaticType::Kind::Named: return a.m_name == b.m_name;
         case StaticType::Kind::Optional:
             return a.m_pointee && b.m_pointee && same_type(*a.m_pointee, *b.m_pointee);
+        case StaticType::Kind::Function: {
+            if (a.m_params.size() != b.m_params.size() || !a.m_pointee || !b.m_pointee) return false;
+            for (size_t i = 0; i < a.m_params.size(); ++i) {
+                // an unknown parameter type (generic, foreign) never makes two signatures differ
+                if (a.m_params[i].known() && b.m_params[i].known() && !same_type(a.m_params[i], b.m_params[i])) return false;
+            }
+            return !a.m_pointee->known() || !b.m_pointee->known() || same_type(*a.m_pointee, *b.m_pointee);
+        }
         case StaticType::Kind::Pointer:
         case StaticType::Kind::Reference:
             return a.m_const == b.m_const && a.m_pointee && b.m_pointee && same_type(*a.m_pointee, *b.m_pointee);
@@ -92,6 +100,16 @@ bool is_pointee_void(const StaticType& view) { return view.m_pointee && view.m_p
 
 StaticType TypeCheckerPass2::static_type_of(const TypeNode* node) const {
     if (node == nullptr) return {};
+    if (node->m_kind == TypeNodeKind::Function) {
+        StaticType function;
+        function.m_kind = StaticType::Kind::Function;
+        for (const TypeNode* param : node->m_param_types) function.m_params.push_back(static_type_of(param));
+        StaticType result;
+        if (node->m_inner == nullptr) result.m_kind = StaticType::Kind::Void;
+        else result = static_type_of(node->m_inner);
+        function.m_pointee = std::make_shared<StaticType>(std::move(result));
+        return function;
+    }
     if (node->m_kind == TypeNodeKind::Optional) {
         StaticType optional;
         optional.m_kind = StaticType::Kind::Optional;
@@ -243,7 +261,25 @@ StaticType TypeCheckerPass2::compute_type(const ExprNode* expr) {
         return {};
     }
     if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(expr)) return static_type_of(literal->m_type);
+    if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
+        StaticType function;
+        function.m_kind = Kind::Function;
+        for (const ParameterDecl& param : lambda->m_function->m_params) function.m_params.push_back(static_type_of(param.m_type));
+        StaticType result;
+        if (lambda->m_function->m_return_type == nullptr) result.m_kind = Kind::Void;
+        else result = static_type_of(lambda->m_function->m_return_type);
+        function.m_pointee = std::make_shared<StaticType>(std::move(result));
+        return function;
+    }
     if (const auto* call = dynamic_cast<const CallExpr*>(expr)) {
+        if (const auto* callee_id = dynamic_cast<const IdentifierExpr*>(call->m_callee); callee_id != nullptr && lookup(callee_id->m_identifier) == nullptr) {
+            // not a variable: a named function (handled below)
+        } else {
+            const StaticType callee = infer_type(call->m_callee);
+            if (callee.m_kind == Kind::Function && callee.m_pointee) {
+                return callee.m_pointee->m_kind == Kind::Void ? StaticType{} : *callee.m_pointee;
+            }
+        }
         const FunctionDeclNode* fn = resolve_callee(call);
         if (fn == nullptr || !fn->m_type_params.empty() || fn->m_return_type == nullptr) return {};
         return static_type_of(fn->m_return_type);
@@ -313,6 +349,13 @@ std::string TypeCheckerPass2::describe(const StaticType& type) const {
         case StaticType::Kind::Void: return "void";
         case StaticType::Kind::Named: return std::string(text_of(type.m_name));
         case StaticType::Kind::Null: return "null";
+        case StaticType::Kind::Function: {
+            std::string text = "fn(";
+            for (size_t i = 0; i < type.m_params.size(); ++i) text += (i ? ", " : "") + describe(type.m_params[i]);
+            text += ")";
+            if (type.m_pointee && type.m_pointee->m_kind != StaticType::Kind::Void) text += " -> " + describe(*type.m_pointee);
+            return text;
+        }
         case StaticType::Kind::Optional: return (type.m_pointee ? describe(*type.m_pointee) : "?") + "?";
         case StaticType::Kind::Pointer:
         case StaticType::Kind::Reference: {
@@ -358,6 +401,11 @@ std::string TypeCheckerPass2::conversion_error(const StaticType& to, const Stati
             return base;
         }
         return conversion_error(*to.m_pointee, from).empty() ? std::string{} : base;
+    }
+    if (to.m_kind == Kind::Function || from.m_kind == Kind::Function) {
+        // A function value only converts to a function type with the same parameters and result.
+        if (to.m_kind == Kind::Void) return {};
+        return (to.m_kind == from.m_kind && same_type(to, from)) ? std::string{} : base;
     }
     if (from.m_kind == Kind::Null) {
         return to.m_kind == Kind::Void ? std::string{}

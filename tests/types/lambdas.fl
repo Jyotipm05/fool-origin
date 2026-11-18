@@ -1,0 +1,22 @@
+// Types the checker records for lambdas and calls through function values.
+// Expected output: lambdas.expected
+
+module tests::types::lambdas;
+
+fn apply(f: fn(i32) -> i32, v: i32) -> i32 {
+    return f(v);
+}
+
+fn run(task: fn()) {
+    task();
+}
+
+fn sample() -> i32 {
+    var count: i32 = 0;
+    twice = (x: i32) -> i32 { return x * 2; };
+    var r: i32 = twice(4);
+    run(capture=[count]) {
+        count = count + 1;
+    }
+    return apply(twice, r);
+}

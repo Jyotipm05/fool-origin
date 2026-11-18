@@ -247,6 +247,9 @@ void BorrowCheckerPass::walk_expr(const ExprNode* expr) {
         for (const ExprNode* arg : intrinsic->m_args) walk_expr(arg);
     } else if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(expr)) {
         for (const FieldInit& field : literal->m_fields) walk_expr(field.m_value);
+    } else if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
+        // The body is its own function (its captures are plain names to it); it is checked once this function is done.
+        if (m_mode == Mode::Check && lambda->m_function != nullptr) m_lambdas.push_back(lambda->m_function);
     }
     // literals and qualified paths (module::function, Enum::Variant) hold no local variables
 }
@@ -473,8 +476,12 @@ bool BorrowCheckerPass::check_function(const FunctionDeclNode* fn, SymbolID owne
     m_origin_of.clear();
     m_call_counter = 0;
 
+    m_lambdas.clear();
     run_pass(Mode::Collect);
     run_pass(Mode::Check);
+    std::vector<const FunctionDeclNode*> pending = std::move(m_lambdas);
+    m_lambdas.clear();
+    for (const FunctionDeclNode* lambda_body : pending) check_function(lambda_body, INVALID_SYMBOL_ID);
     return m_diag.error_count() == errors_before;
 }
 

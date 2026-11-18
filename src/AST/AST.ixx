@@ -127,7 +127,8 @@ enum class TypeNodeKind : uint8_t {
     Pointer,   ///< *T / const* T
     Reference, ///< &T / const& T
     Never,     ///< !
-    Optional   ///< T? (m_inner = T): a value that may be `null`
+    Optional,  ///< T? (m_inner = T): a value that may be `null`
+    Function   ///< fn(A, B) -> R (m_param_types, m_inner = R; nullptr means void): a function or lambda value
 };
 
 /**
@@ -141,7 +142,8 @@ public:
     bool m_is_const{false};              ///< 'const*' / 'const&'
     std::vector<SymbolID> m_path;        ///< Path segments (Path only)
     std::vector<GenericArg> m_generic_args;
-    TypeNode* m_inner{nullptr};          ///< Pointee / referent (Pointer, Reference)
+    TypeNode* m_inner{nullptr};          ///< Pointee / referent (Pointer, Reference), wrapped type (Optional), result (Function)
+    std::vector<TypeNode*> m_param_types; ///< Parameter types (Function only)
 
     // 2. Constructors
     TypeNode() = default;
@@ -595,6 +597,31 @@ public:
 
     // 2. Constructors
     FunctionDeclNode() = default;
+};
+
+/// One name in a `capture=[a, b]` list.
+struct CaptureName {
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    SourceSpan m_span;
+};
+
+/**
+ * @class LambdaExpr
+ * @brief `(x: i32) -> i32 { ... }` and the trailing block of `task(capture=[a, b]) { ... }`.
+ * @details The signature and body live in a synthesized function node (named `<lambda>`, never registered in the
+ *          symbol table). The body may only use its parameters, its own locals, the listed captures and
+ *          program-wide functions, types and constants.
+ */
+class LambdaExpr : public ExprNode {
+public:
+    // 1. Member variables
+    FunctionDeclNode* m_function{nullptr};
+    std::vector<CaptureName> m_captures;
+    bool m_has_capture_list{false};   ///< `capture=[...]` was written (possibly empty)
+    bool m_is_trailing{false};        ///< the block after a call's `)`, passed as its last argument
+
+    // 2. Constructors
+    LambdaExpr() = default;
 };
 
 class RulesetDeclNode : public DeclNode {

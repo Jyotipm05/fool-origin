@@ -1,0 +1,11 @@
+// `capture=[...]` lists what a block may use, so it needs the block that follows the call.
+
+module tests::negative::lambda_capture_no_block;
+
+fn run(task: fn()) {
+    task();
+}
+
+fn capture_without_block() {
+    run(capture=[]); // expect-error: needs a block after the call
+}

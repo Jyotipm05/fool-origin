@@ -1,0 +1,112 @@
+// Lambdas, function types and explicit captures.
+
+module tests::positive::lambdas;
+
+var shared: i32 = 0;
+const LIMIT: i32 = 10;
+constx SCALE: i32 = 3;
+
+class Counter {
+    value: i32;
+}
+
+fn apply(f: fn(i32) -> i32, v: i32) -> i32 {
+    return f(v);
+}
+
+fn run(task: fn()) {
+    task();
+}
+
+fn repeat(times: i32, body: fn()) {
+    body();
+}
+
+fn helper(x: i32) -> i32 {
+    return x + 1;
+}
+
+// `name = (params) -> type { body };` declares a function, exactly like `fn name(...)`.
+double_it = (x: i32) -> i32 {
+    return x * 2;
+};
+
+add = (a: i32, b: i32 = 1) -> i32 {
+    return a + b;
+};
+
+fn lambdas() -> i32 {
+    // Unified syntax: a lambda is a function without a name.
+    twice = (x: i32) -> i32 { return x * 2; };
+    var total: i32 = twice(4);
+    total = total + twice(x = 5);                 // parameter names work like a function's
+
+    scaled = (v: i32, by: i32 = 2) -> i32 { return v * by; };
+    total = total + scaled(3) + scaled(by = 4, v = 2);
+
+    no_result = () { return; };
+    no_result();
+
+    // Passed as an argument, and as a variable of function type.
+    total = total + apply((x: i32) -> i32 { return x + 1; }, 1);
+    var f: fn(i32) -> i32 = twice;
+    total = total + f(6) + apply(f, 7) + apply(helper_value(), 2);
+    total = total + double_it(1) + add(2) + add(b = 5, a = 1);   // `name = (...) -> T { }` declared functions
+    return total;
+}
+
+fn helper_value() -> fn(i32) -> i32 {
+    return (x: i32) -> i32 { return x - 1; };
+}
+
+fn captures() -> i32 {
+    var counter: i32 = 0;
+    var factor: i32 = 3;
+    bump = (by: i32) -> i32 capture=[counter, factor] {
+        counter = counter + by * factor;          // captured variables are shared with the enclosing code
+        return counter;
+    };
+    var seen: i32 = bump(2);
+
+    // Trailing block: passed as the last argument; `capture=[...]` lists what it may touch.
+    run(capture=[counter]) {
+        counter = counter + 1;
+    }
+    run(capture=[counter, shared]) {
+        shared = counter;                          // a mutable global needs to be listed too
+    }
+    repeat(3, capture=[counter]) { }               // a block can follow other arguments
+    run() {
+        var local: i32 = 5;                        // its own locals are always fine
+        local = local + LIMIT + SCALE;             // so are constants, and functions and types
+        local = helper(local);
+    }
+    return counter + seen;
+}
+
+fn nested(base: i32) -> i32 {
+    var out: i32 = 0;
+    run(capture=[out, base]) {
+        inner = (n: i32) -> i32 capture=[out, base] {
+            out = out + n + base;
+            return out;
+        };
+        inner(1);
+    }
+    return out;
+}
+
+fn optional_capture(maybe: Counter?) -> i32 {
+    var seen: i32 = 0;
+    if (maybe) {
+        run(capture=[maybe, seen]) {
+            if (maybe) { seen = maybe.value; }     // the lambda has to check again: the original could change
+        }
+    }
+    return seen;
+}
+
+fn shadows(x: i32) -> i32 {
+    f = (x: i32) -> i32 { return x * 2; };         // a parameter may hide an outer name
+    return f(x);
+}

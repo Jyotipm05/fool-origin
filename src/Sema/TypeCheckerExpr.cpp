@@ -32,7 +32,8 @@ SymbolID nominal_name(const TypeNode* type) {
         case TypeNodeKind::Pointer:
         case TypeNodeKind::Reference:
         case TypeNodeKind::Optional: return nominal_name(type->m_inner);
-        case TypeNodeKind::Never: return INVALID_SYMBOL_ID;
+        case TypeNodeKind::Never:
+        case TypeNodeKind::Function: return INVALID_SYMBOL_ID;
     }
     return INVALID_SYMBOL_ID;
 }
@@ -102,9 +103,12 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
             }
             return;
         }
+        if (report_uncaptured(id->m_identifier, expr->m_span)) return;
         if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) && !is_generic_parameter(id->m_identifier)) {
             m_diag.error(expr->m_span, "use of undeclared identifier '" + name_of(id->m_identifier) + "'");
         }
+    } else if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
+        check_lambda(lambda);
     } else if (const auto* path = dynamic_cast<const PathExpr*>(expr)) {
         SymbolID first = path->m_segments.front();
         bool known_type = m_pass0.find_class(first) != nullptr || m_pass0.find_enum(first) != nullptr ||
@@ -249,6 +253,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
                                           "' (declared with 'const')");
             } else {
                 binding->m_is_moved = false; // assignment re-initializes a moved-from variable
+                binding->m_lambda = dynamic_cast<const LambdaExpr*>(assign->m_rhs); // parameter names are known only for the latest lambda
                 check_assignable(binding->m_static_type, assign->m_rhs, "assignment to '" + name_of(name) + "'");
                 if (binding->m_static_type.is_optional()) {
                     // What was just stored decides whether the variable holds a value from here on.
@@ -259,6 +264,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
             }
             return;
         }
+        if (report_uncaptured(name, lhs->m_span)) return;
         if (const VarDeclNode* global = m_pass0.find_global(name)) {
             if (global->m_kind != BindingKind::Mutable) {
                 m_diag.error(lhs->m_span, "cannot assign to " +
@@ -280,6 +286,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
         declared.m_binding_kind = BindingKind::Mutable;
         declared.m_span = lhs->m_span;
         declared.m_static_type = infer_type(assign->m_rhs);
+        declared.m_lambda = dynamic_cast<const LambdaExpr*>(assign->m_rhs);
         if (const auto* lit = dynamic_cast<const StructLiteralExpr*>(assign->m_rhs)) {
             declared.m_type_name = nominal_name(lit->m_type);
         } else if (const auto* cast = dynamic_cast<const CastExpr*>(assign->m_rhs)) {
@@ -406,13 +413,17 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     const FunctionDeclNode* consuming_method = nullptr;
     SymbolID receiver_name = INVALID_SYMBOL_ID;
     const ExprNode* receiver_object = nullptr;
+    const LambdaExpr* callee_lambda = nullptr;
 
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(call->m_callee)) {
         display = name_of(id->m_identifier);
-        if (lookup(id->m_identifier) != nullptr) {
+        if (const SymbolBinding* local = lookup(id->m_identifier)) {
             check_expression(call->m_callee); // calling a local value
+            callee_lambda = local->m_lambda;
         } else if (const FunctionDeclNode* fn = m_pass0.find_function(id->m_identifier)) {
             target = fn;
+        } else if (report_uncaptured(id->m_identifier, call->m_callee->m_span)) {
+            // a variable of the enclosing code used as a function without being captured
         } else if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) &&
                    !is_generic_parameter(id->m_identifier)) {
             m_diag.error(call->m_callee->m_span, "call to undeclared function '" + display + "'");
@@ -471,7 +482,11 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     }
 
     for (const CallArg& arg : call->m_args) check_expression(arg.m_expr);
-    if (target != nullptr) bind_arguments(target, call, display, receiver_object);
+    if (target != nullptr) {
+        bind_arguments(target, call, display, receiver_object);
+    } else if (const StaticType callee_type = infer_type(call->m_callee); callee_type.m_kind == StaticType::Kind::Function) {
+        check_function_value_call(call, callee_type, callee_lambda, display);
+    }
 
     // `this self` consumes the receiver: later uses are errors until it is assigned again.
     if (consuming_method != nullptr) {

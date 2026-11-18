@@ -1,0 +1,31 @@
+module tests::borrow_lambda_body;
+
+fn touch(a: &i32) {
+    return;
+}
+
+fn run(task: fn()) {
+    task();
+}
+
+// The body of a lambda is borrow-checked like any other function.
+fn outer() {
+    run() {
+        var x = 1;
+        var r = &x;
+        // expect-error: cannot assign to 'x' because it is borrowed by 'r'
+        x = 5;
+        touch(r);
+    }
+}
+
+fn lambda_value() {
+    f = () {
+        var y = 1;
+        var s = &y;
+        // expect-error: cannot assign to 'y' because it is borrowed by 's'
+        y = 2;
+        touch(s);
+    };
+    f();
+}

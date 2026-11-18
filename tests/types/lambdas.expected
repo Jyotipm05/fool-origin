@@ -1,0 +1,25 @@
+7:12-16 call i32
+7:12-13 ident fn(i32) -> i32
+7:14-15 ident i32
+11:5-11 call ?
+11:5-9 ident fn()
+15:22-23 int integer literal
+16:5-46 binary ?
+16:5-10 ident fn(i32) -> i32
+16:13-46 lambda fn(i32) -> i32
+16:38-43 binary i32
+16:38-39 ident i32
+16:42-43 int integer literal
+17:18-26 call i32
+17:18-23 ident fn(i32) -> i32
+17:24-25 int integer literal
+18:5-20:6 call ?
+18:26-20:6 lambda fn()
+19:9-26 binary ?
+19:9-14 ident i32
+19:17-26 binary i32
+19:17-22 ident i32
+19:25-26 int integer literal
+21:12-27 call i32
+21:18-23 ident fn(i32) -> i32
+21:25-26 ident i32

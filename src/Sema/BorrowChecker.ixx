@@ -74,6 +74,7 @@ class BorrowCheckerPass {
     std::unordered_map<SymbolID, SymbolID> m_class_of;       ///< local/param -> class name, for method lookups
     std::unordered_map<SymbolID, SymbolID> m_origin_of;      ///< borrower -> origin variable
     size_t m_call_counter{0};
+    std::vector<const FunctionDeclNode*> m_lambdas;           ///< lambda bodies met while checking, checked as functions of their own afterwards
     std::vector<std::unordered_map<SymbolID, SymbolID>> m_scopes; ///< name -> unique declaration identity
     size_t m_decl_counter{0};
     const FunctionDeclNode* m_fn{nullptr};

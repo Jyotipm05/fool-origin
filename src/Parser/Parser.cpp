@@ -199,7 +199,20 @@ void Parser::parse_call_arguments(CallExpr* call) {
     bool saved_angle = m_in_angle_list;
     m_no_struct_literal = false;
     m_in_angle_list = false;
+    std::vector<CaptureName> captures;
+    bool has_capture = false;
     while (!check(TokenKind::CloseParen) && !is_at_end()) {
+        // `capture=[a, b]` is not an argument: it lists what the block that follows the call may use.
+        if (check_identifier("capture") && (peek().m_kind == TokenKind::Equal || peek().m_kind == TokenKind::Colon) &&
+            peek(2).m_kind == TokenKind::OpenBracket) {
+            if (has_capture) error_here("a call can have only one 'capture=[...]' list");
+            advance();
+            advance();
+            has_capture = true;
+            parse_capture_list(captures);
+            if (!match(TokenKind::Comma)) break;
+            continue;
+        }
         CallArg arg;
         arg.m_span.m_start = current().m_span.m_start;
         // `name: value` and `name = value` both label an argument. Inside an argument list the second form is
@@ -217,6 +230,66 @@ void Parser::parse_call_arguments(CallExpr* call) {
     }
     m_no_struct_literal = saved_no_struct;
     m_in_angle_list = saved_angle;
+    m_pending_captures = std::move(captures);
+    m_pending_has_capture = has_capture;
+}
+
+bool Parser::looks_like_lambda(size_t paren_offset) const {
+    if (peek(paren_offset).m_kind != TokenKind::OpenParen) return false;
+    const Token& first = peek(paren_offset + 1);
+    if (first.m_kind == TokenKind::CloseParen) {
+        const TokenKind after = peek(paren_offset + 2).m_kind;
+        return after == TokenKind::Arrow || after == TokenKind::OpenBrace;
+    }
+    return first.m_kind == TokenKind::Identifier && peek(paren_offset + 2).m_kind == TokenKind::Colon;
+}
+
+void Parser::parse_capture_list(std::vector<CaptureName>& out) {
+    consume(TokenKind::OpenBracket, "Expected '[' to start the capture list");
+    while (!check(TokenKind::CloseBracket) && !is_at_end()) {
+        Token name = consume(TokenKind::Identifier, "Expected a variable name in the capture list");
+        if (name.m_kind == TokenKind::Invalid) break;
+        out.push_back(CaptureName{name.m_symbol_id, name.m_span});
+        if (!match(TokenKind::Comma)) break;
+    }
+    consume(TokenKind::CloseBracket, "Expected ']' to close the capture list");
+}
+
+FunctionDeclNode* Parser::make_lambda_function(SourceLocation start) {
+    auto* fn = m_arena.create<FunctionDeclNode>();
+    fn->m_name = StringInterner::get().intern("<lambda>");
+    fn->m_module = m_current_section;
+    fn->m_has_body = true;
+    fn->m_span.m_start = start;
+    return fn;
+}
+
+/// `(x: i32, y: i32 = 0) -> i32 capture=[data] { body }`; the cursor is on '('.
+LambdaExpr* Parser::parse_lambda() {
+    SourceLocation start = current().m_span.m_start;
+    FunctionDeclNode* fn = make_lambda_function(start);
+    auto* lambda = m_arena.create<LambdaExpr>();
+    lambda->m_function = fn;
+
+    consume(TokenKind::OpenParen, "Expected '(' to start the parameter list");
+    parse_parameters(fn);
+    consume(TokenKind::CloseParen, "Expected ')' after parameter list");
+    if (fn->m_receiver.m_kind != ReceiverKind::None) error(fn->m_span, "a lambda has no 'this' receiver");
+    if (match(TokenKind::Arrow)) fn->m_return_type = parse_type();
+    if (check_identifier("capture") && peek().m_kind == TokenKind::Equal && peek(2).m_kind == TokenKind::OpenBracket) {
+        advance();
+        advance();
+        lambda->m_has_capture_list = true;
+        parse_capture_list(lambda->m_captures);
+    }
+    if (BlockStmt* body = parse_block()) {
+        fn->m_body = std::move(body->m_statements);
+    } else {
+        return nullptr;
+    }
+    fn->m_span = span_from(start);
+    lambda->m_span = fn->m_span;
+    return lambda;
 }
 
 ExprNode* Parser::parse_postfix(ExprNode* base) {
@@ -236,6 +309,32 @@ ExprNode* Parser::parse_postfix(ExprNode* base) {
             parse_call_arguments(call);
             consume(TokenKind::CloseParen, "Expected ')' after call arguments");
             call->m_span = span_from(start);
+            std::vector<CaptureName> captures = std::move(m_pending_captures);
+            const bool has_capture = m_pending_has_capture;
+            m_pending_captures.clear();
+            m_pending_has_capture = false;
+            if (check(TokenKind::OpenBrace) && !m_no_struct_literal) {
+                // `task(capture=[a, b]) { ... }`: the block is a lambda passed as the last argument.
+                SourceLocation block_start = current().m_span.m_start;
+                if (BlockStmt* block = parse_block()) {
+                    FunctionDeclNode* fn = make_lambda_function(block_start);
+                    fn->m_body = std::move(block->m_statements);
+                    fn->m_span = block->m_span;
+                    auto* lambda = m_arena.create<LambdaExpr>();
+                    lambda->m_function = fn;
+                    lambda->m_captures = std::move(captures);
+                    lambda->m_has_capture_list = has_capture;
+                    lambda->m_is_trailing = true;
+                    lambda->m_span = block->m_span;
+                    CallArg arg;
+                    arg.m_expr = lambda;
+                    arg.m_span = lambda->m_span;
+                    call->m_args.push_back(arg);
+                    call->m_span = span_from(start);
+                }
+            } else if (has_capture) {
+                error(call->m_span, "'capture=[...]' needs a block after the call: name(capture=[...]) { ... }");
+            }
             base = call;
         } else if (check(TokenKind::OpenBracket)) {
             advance();
@@ -468,6 +567,7 @@ ExprNode* Parser::parse_primary() {
         case TokenKind::At:
             return parse_intrinsic_call();
         case TokenKind::OpenParen: {
+            if (looks_like_lambda(0)) return parse_lambda();
             advance();
             bool saved_no_struct = m_no_struct_literal;
             bool saved_angle = m_in_angle_list;
@@ -516,6 +616,26 @@ TypeNode* Parser::parse_type_without_optional(bool allow_generic_args) {
         auto* never = m_arena.create<TypeNode>(TypeNodeKind::Never);
         never->m_span = span_from(start);
         return never;
+    }
+
+    if (check(TokenKind::KwFn)) {
+        // `fn(i32, bool) -> i32`: the type of a function or lambda value.
+        advance();
+        auto* fn_type = m_arena.create<TypeNode>(TypeNodeKind::Function);
+        consume(TokenKind::OpenParen, "Expected '(' after 'fn' in a function type");
+        while (!check(TokenKind::CloseParen) && !is_at_end()) {
+            TypeNode* param = parse_type(allow_generic_args);
+            if (param == nullptr) return nullptr;
+            fn_type->m_param_types.push_back(param);
+            if (!match(TokenKind::Comma)) break;
+        }
+        consume(TokenKind::CloseParen, "Expected ')' to close the parameter types of a function type");
+        if (match(TokenKind::Arrow)) {
+            fn_type->m_inner = parse_type(allow_generic_args);
+            if (fn_type->m_inner == nullptr) return nullptr;
+        }
+        fn_type->m_span = span_from(start);
+        return fn_type;
     }
 
     bool is_const = false;

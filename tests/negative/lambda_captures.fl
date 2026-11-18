@@ -1,0 +1,90 @@
+// A lambda body can only use its parameters, its own locals, its capture list and program-wide functions, types and constants.
+
+module tests::negative::lambda_captures;
+
+var shared: i32 = 0;
+var other_global: i32 = 0;
+const FROZEN: i32 = 7;
+
+fn run(task: fn()) {
+    task();
+}
+
+fn uncaptured_local() {
+    var data: i32 = 1;
+    run() {
+        data = 2; // expect-error: 'data' belongs to the enclosing code and is not captured
+    }
+}
+
+fn uncaptured_read() -> i32 {
+    var data: i32 = 1;
+    var result: i32 = 0;
+    run(capture=[result]) {
+        result = data + 1; // expect-error: 'data' belongs to the enclosing code and is not captured
+    }
+    return result;
+}
+
+fn uncaptured_global() {
+    run(capture=[shared]) {
+        shared = 1;
+        other_global = 2; // expect-error: global variable 'other_global' is not captured
+    }
+}
+
+fn immutable_global_is_fine() -> i32 {
+    var out: i32 = 0;
+    run(capture=[out]) {
+        out = FROZEN;
+    }
+    return out;
+}
+
+fn uncaptured_function_value() {
+    f = (x: i32) -> i32 { return x; };
+    run() {
+        f(1); // expect-error: 'f' belongs to the enclosing code and is not captured
+    }
+}
+
+fn capture_unknown() {
+    run(capture=[nothing]) { // expect-error: cannot capture 'nothing'
+    }
+}
+
+fn capture_twice() {
+    var a: i32 = 0;
+    run(capture=[a, a]) { // expect-error: 'a' is captured more than once
+    }
+}
+
+fn immutable_stays_immutable() {
+    const fixed: i32 = 1;
+    run(capture=[fixed]) {
+        fixed = 2; // expect-error: cannot assign twice to immutable binding 'fixed'
+    }
+}
+
+fn nested_needs_its_own_capture() {
+    var a: i32 = 0;
+    run(capture=[a]) {
+        run() {
+            a = 1; // expect-error: 'a' belongs to the enclosing code and is not captured
+        }
+    }
+}
+
+fn lambda_form(base: i32) {
+    g = (n: i32) -> i32 {
+        return n + base; // expect-error: 'base' belongs to the enclosing code and is not captured
+    };
+}
+
+fn optional_needs_a_new_check(maybe: i32?) {
+    if (maybe) {
+        run(capture=[maybe]) {
+            var v: i32 = maybe + 1; // expect-error: operator '+' cannot be applied to 'i32?'
+        }
+    }
+}

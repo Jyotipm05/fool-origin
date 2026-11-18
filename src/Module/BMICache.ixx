@@ -92,7 +92,7 @@ private:
 [[nodiscard]] std::string to_hex(const Digest& digest);
 
 /// Bumped whenever the byte layout of an entry changes.
-constexpr uint32_t BMI_FORMAT_VERSION = 2;
+constexpr uint32_t BMI_FORMAT_VERSION = 3;
 
 /// Fingerprint of the frontend (lexer + parser + AST) this compiler was built with.
 [[nodiscard]] std::string_view frontend_fingerprint();

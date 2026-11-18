@@ -76,6 +76,13 @@ std::string type_to_string(const TypeNode* type) {
             return "!";
         case TypeNodeKind::Optional:
             return type_to_string(type->m_inner) + "?";
+        case TypeNodeKind::Function: {
+            std::string text = "fn(";
+            for (size_t i = 0; i < type->m_param_types.size(); ++i) text += (i ? ", " : "") + type_to_string(type->m_param_types[i]);
+            text += ")";
+            if (type->m_inner != nullptr) text += " -> " + type_to_string(type->m_inner);
+            return text;
+        }
         case TypeNodeKind::Pointer:
             return std::string(type->m_is_const ? "const* " : "*") + type_to_string(type->m_inner);
         case TypeNodeKind::Reference:

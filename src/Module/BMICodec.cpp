@@ -42,7 +42,7 @@ constexpr int MAX_DEPTH = 1000;
 enum Tag : uint8_t {
     // expressions
     ExprNull = 0, ExprInt = 1, ExprFloat, ExprString, ExprBool, ExprIdent, ExprPath, ExprUnary, ExprBinary,
-    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral,
+    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral, ExprLambda,
     // statements
     StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional,
     // declarations
@@ -171,6 +171,8 @@ private:
         syms(t->m_path);
         generic_args(t->m_generic_args);
         type(t->m_inner);
+        count(t->m_param_types.size());
+        for (const TypeNode* param : t->m_param_types) type(param);
     }
 
     void exprs(const std::vector<ExprNode*>& v) {
@@ -217,6 +219,11 @@ private:
             u8(ExprStruct); span(n->m_span); type(n->m_type);
             count(n->m_fields.size());
             for (const FieldInit& f : n->m_fields) { sym(f.m_name); expr(f.m_value); span(f.m_span); }
+        } else if (auto* n = dynamic_cast<const LambdaExpr*>(e)) {
+            u8(ExprLambda); span(n->m_span); decl(n->m_function);
+            count(n->m_captures.size());
+            for (const CaptureName& c : n->m_captures) { sym(c.m_name); span(c.m_span); }
+            boolean(n->m_has_capture_list); boolean(n->m_is_trailing);
         } else {
             fail(); // unknown expression node: refuse to write a lossy entry
         }
@@ -540,11 +547,13 @@ private:
         if (guard.too_deep()) return nullptr;
         auto* t = m_arena.create<TypeNode>();
         t->m_span = span();
-        t->m_kind = enum8<TypeNodeKind>(static_cast<uint8_t>(TypeNodeKind::Optional));
+        t->m_kind = enum8<TypeNodeKind>(static_cast<uint8_t>(TypeNodeKind::Function));
         t->m_is_const = boolean();
         t->m_path = syms();
         t->m_generic_args = generic_args();
         t->m_inner = type();
+        uint32_t params = count(1);
+        for (uint32_t i = 0; i < params && m_ok; ++i) t->m_param_types.push_back(type());
         return m_ok ? t : nullptr;
     }
 
@@ -624,6 +633,23 @@ private:
                 a.m_span = span();
                 n->m_args.push_back(a);
             }
+            result = n;
+            break;
+        }
+        case ExprLambda: {
+            sp = span();
+            auto* n = m_arena.create<LambdaExpr>();
+            n->m_function = dynamic_cast<FunctionDeclNode*>(decl());
+            if (n->m_function == nullptr) { fail(); break; }
+            uint32_t captures = count(13);
+            for (uint32_t i = 0; i < captures && m_ok; ++i) {
+                CaptureName c;
+                c.m_name = sym();
+                c.m_span = span();
+                n->m_captures.push_back(c);
+            }
+            n->m_has_capture_list = boolean();
+            n->m_is_trailing = boolean();
             result = n;
             break;
         }

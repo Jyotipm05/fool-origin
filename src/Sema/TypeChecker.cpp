@@ -41,6 +41,7 @@ namespace fool {
                 case TypeNodeKind::Optional:
                     return nominal_name(type->m_inner);
                 case TypeNodeKind::Never:
+                case TypeNodeKind::Function:
                     return INVALID_SYMBOL_ID;
             }
             return INVALID_SYMBOL_ID;
@@ -694,6 +695,7 @@ namespace fool {
             }
         }
         binding.m_constant = constant;
+        binding.m_lambda = dynamic_cast<const LambdaExpr*>(var->m_initializer);
         if (var->m_type == nullptr && var->m_initializer != nullptr) binding.m_static_type = infer_type(var->m_initializer);
         // A `T?` initialized with a plain `T` starts out holding a value.
         if (var->m_type != nullptr && var->m_initializer != nullptr && binding.m_static_type.is_optional()) {

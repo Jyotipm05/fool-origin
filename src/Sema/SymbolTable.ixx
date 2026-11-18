@@ -323,7 +323,7 @@ public:
  * inferred (generics, calls into other modules, ...); checks that need it are skipped, never guessed.
  */
 struct StaticType {
-    enum class Kind : uint8_t { Unknown, Int, Float, Bool, Void, Pointer, Reference, Named, Optional, Null };
+    enum class Kind : uint8_t { Unknown, Int, Float, Bool, Void, Pointer, Reference, Named, Optional, Null, Function };
 
     // 1. Member variables
     Kind m_kind{Kind::Unknown};
@@ -332,7 +332,8 @@ struct StaticType {
     bool m_signed{false};
     bool m_literal{false};                  ///< Type of a literal: adapts to its context
     bool m_const{false};                    ///< Pointer/Reference: the pointee is read-only
-    std::shared_ptr<StaticType> m_pointee;  ///< Pointer/Reference target, or the wrapped type of an Optional
+    std::shared_ptr<StaticType> m_pointee;  ///< Pointer/Reference target, the wrapped type of an Optional, the result of a Function (Void when none)
+    std::vector<StaticType> m_params;       ///< Parameter types of a Function
 
     // 2. Member functions
     [[nodiscard]] bool known() const { return m_kind != Kind::Unknown; }
@@ -357,6 +358,7 @@ struct SymbolBinding {
     std::optional<ConstValue> m_constant; ///< Value of a local `constx`; scoped (and shadowed) with the binding
     StaticType m_static_type;     ///< Inferred or declared type, for cast validation
     bool m_narrowed{false};       ///< An optional that is known to hold a value at the current point of the flow
+    const LambdaExpr* m_lambda{nullptr}; ///< The lambda this variable was initialized with (calls may use its parameter names)
     SourceSpan m_span;
 
     // 2. Constructors in the MIDDLE
@@ -398,6 +400,7 @@ class TypeCheckerPass2 {
     DiagnosticEngine& m_diag;
     std::vector<std::vector<SymbolBinding>> m_scopes;
     const FunctionDeclNode* m_current_fn{nullptr};
+    std::vector<std::vector<std::vector<SymbolBinding>>> m_enclosing_scopes; ///< scope stacks of the code around the lambda being checked
     const ClassDeclNode* m_current_owner{nullptr};
     int m_loop_depth{0};
     std::vector<SymbolID> m_narrow_log;   ///< names narrowed so far, undone in LIFO order when their scope ends
@@ -490,6 +493,12 @@ private:
     void check_assignment(const BinaryExpr* assign);
     void check_mutation_target(const ExprNode* target, SourceSpan span);
     void check_call(const CallExpr* call);
+    // Lambdas and function values (TypeCheckerLambda.cpp)
+    void check_lambda(const LambdaExpr* lambda);
+    void check_function_value_call(const CallExpr* call, const StaticType& callee, const LambdaExpr* lambda, const std::string& display);
+    [[nodiscard]] bool is_enclosing_variable(SymbolID name) const;   ///< a local of the code around the lambda being checked
+    /// Inside a lambda: reports a use of a variable (local of the enclosing code, or mutable global) that is not in the capture list.
+    bool report_uncaptured(SymbolID name, SourceSpan span);
     void check_member_access(const MemberExpr* member);
     void check_struct_literal(const StructLiteralExpr* lit);
     void bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name,

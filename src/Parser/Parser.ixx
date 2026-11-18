@@ -41,6 +41,8 @@ class Parser {
     bool m_speculation_failed{false};
     bool m_no_struct_literal{false};               ///< Inside if/while/for headers: '{' opens the body
     bool m_in_angle_list{false};                   ///< Inside '<...>': '>' closes the list, not an operator
+    std::vector<CaptureName> m_pending_captures;   ///< `capture=[...]` of the call whose arguments were just parsed
+    bool m_pending_has_capture{false};
 
 public:
     // 2. Constructors and Destructors in the MIDDLE
@@ -79,6 +81,11 @@ private:
     ExprNode* parse_number();
     [[nodiscard]] bool looks_like_struct_body() const;
     void parse_call_arguments(CallExpr* call);
+    [[nodiscard]] bool looks_like_lambda(size_t paren_offset) const;   ///< `(` at peek(offset) starts `(name: T` or `() ->` / `() {`
+    void parse_capture_list(std::vector<CaptureName>& out);            ///< `[a, b]`
+    LambdaExpr* parse_lambda();                                        ///< `(params) -> R capture=[...] { body }`
+    FunctionDeclNode* make_lambda_function(SourceLocation start);
+    FunctionDeclNode* parse_lambda_function_decl();                    ///< `name = (params) -> R { body };` at module level
 
     // --- types and generics (Parser.cpp)
     TypeNode* parse_type(bool allow_generic_args = true);

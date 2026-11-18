@@ -1,0 +1,67 @@
+// Function types: signatures must match, results are checked, and calls through a function value are checked.
+
+module tests::negative::lambda_types;
+
+fn apply(f: fn(i32) -> i32, v: i32) -> i32 {
+    return f(v);
+}
+
+fn run(task: fn()) {
+    task();
+}
+
+fn wrong_parameter() -> i32 {
+    return apply((x: bool) -> i32 { return 1; }, 1); // expect-error: cannot convert 'fn(bool) -> i32' to 'fn(i32) -> i32'
+}
+
+fn wrong_result() -> i32 {
+    return apply((x: i32) -> bool { return true; }, 1); // expect-error: cannot convert 'fn(i32) -> bool' to 'fn(i32) -> i32'
+}
+
+fn wrong_arity() -> i32 {
+    return apply((x: i32, y: i32) -> i32 { return x; }, 1); // expect-error: cannot convert 'fn(i32, i32) -> i32' to 'fn(i32) -> i32'
+}
+
+fn block_has_no_parameters(body: fn(i32)) {
+    body(1);
+}
+
+fn trailing_block_signature() {
+    block_has_no_parameters() { // expect-error: cannot convert 'fn()' to 'fn(i32)'
+    }
+}
+
+fn not_a_function() {
+    var n: i32 = (x: i32) -> i32 { return x; }; // expect-error: cannot convert 'fn(i32) -> i32' to 'i32'
+}
+
+fn call_through_value(f: fn(i32) -> i32) -> i32 {
+    var a: i32 = f(true); // expect-error: cannot convert 'bool' to 'i32'
+    var b: i32 = f(1, 2); // expect-error: takes 1 argument(s) but 2 were given
+    var c: i32 = f(x = 1); // expect-error: argument 'x' cannot be named
+    return a + b + c;
+}
+
+fn call_known_lambda() -> i32 {
+    twice = (x: i32) -> i32 { return x * 2; };
+    var a: i32 = twice(true); // expect-error: cannot convert 'bool' to 'i32'
+    var b: i32 = twice(x = 1, y = 2); // expect-error: has no parameter named 'y'
+    return a + b;
+}
+
+fn body_checks() {
+    bad = (x: i32) -> i32 { // expect-error: lambda does not return a value on all paths
+        var y: i32 = x;
+    };
+    worse = (x: i32) -> i32 {
+        return true; // expect-error: cannot
+    };
+    unit = () {
+        return 1; // expect-error: cannot return a value
+    };
+}
+
+fn result_type() -> bool {
+    twice = (x: i32) -> i32 { return x * 2; };
+    return twice(2); // expect-error: cannot
+}

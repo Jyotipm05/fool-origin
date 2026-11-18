@@ -290,6 +290,14 @@ DeclNode* Parser::parse_declaration() {
         case TokenKind::Eof:
             if (!attrs.empty()) error_here("Attribute is not followed by a declaration");
             return nullptr;
+        case TokenKind::Identifier:
+            if (peek().m_kind == TokenKind::Equal && looks_like_lambda(2)) {
+                decl = parse_lambda_function_decl();
+                break;
+            }
+            error_here("Unexpected '" + describe(current()) + "' at declaration level");
+            synchronize_declaration();
+            return nullptr;
         default:
             error_here("Unexpected '" + describe(current()) + "' at declaration level");
             synchronize_declaration();
@@ -407,6 +415,22 @@ void Parser::parse_parameters(FunctionDeclNode* fn) {
         fn->m_params.push_back(param);
         if (!match(TokenKind::Comma)) break;
     }
+}
+
+/// `name = (params) -> R { body };` declares the function `name`, exactly like `fn name(params) -> R { body }`.
+FunctionDeclNode* Parser::parse_lambda_function_decl() {
+    Token name = advance();
+    advance(); // '='
+    LambdaExpr* lambda = parse_lambda();
+    if (lambda == nullptr) {
+        synchronize_declaration();
+        return nullptr;
+    }
+    if (lambda->m_has_capture_list) error(lambda->m_span, "a function declaration cannot have a capture list; it can only use program-wide names");
+    FunctionDeclNode* fn = lambda->m_function;
+    fn->m_name = name.m_symbol_id;
+    consume(TokenKind::Semicolon, "Expected ';' after the function definition");
+    return fn;
 }
 
 FunctionDeclNode* Parser::parse_function(bool is_async) {
@@ -836,7 +860,15 @@ StmtNode* Parser::parse_statement() {
         synchronize_statement();
         return nullptr;
     }
-    consume(TokenKind::Semicolon, "Expected ';' after expression");
+    // A call that ends in a block (`task(capture=[a]) { ... }`) needs no ';'.
+    const auto* block_call = dynamic_cast<const CallExpr*>(expr);
+    const auto* last_arg = block_call != nullptr && !block_call->m_args.empty()
+                               ? dynamic_cast<const LambdaExpr*>(block_call->m_args.back().m_expr) : nullptr;
+    if (last_arg != nullptr && last_arg->m_is_trailing) {
+        match(TokenKind::Semicolon);
+    } else {
+        consume(TokenKind::Semicolon, "Expected ';' after expression");
+    }
     auto* stmt = m_arena.create<ExprStmt>(expr);
     stmt->m_span = span_from(start);
     return stmt;
