@@ -169,6 +169,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
             if (dynamic_cast<const IdentifierExpr*>(arg) != nullptr || dynamic_cast<const PathExpr*>(arg) != nullptr) continue;
             check_expression(arg);
         }
+        check_reflection_intrinsic(intrinsic);
     }
 }
 
@@ -414,6 +415,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     SymbolID receiver_name = INVALID_SYMBOL_ID;
     const ExprNode* receiver_object = nullptr;
     const LambdaExpr* callee_lambda = nullptr;
+    bool builtin_serialize = false;
 
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(call->m_callee)) {
         display = name_of(id->m_identifier);
@@ -422,6 +424,8 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
             callee_lambda = local->m_lambda;
         } else if (const FunctionDeclNode* fn = m_pass0.find_function(id->m_identifier)) {
             target = fn;
+        } else if (is_builtin_serialize(id->m_identifier)) {
+            builtin_serialize = true;
         } else if (report_uncaptured(id->m_identifier, call->m_callee->m_span)) {
             // a variable of the enclosing code used as a function without being captured
         } else if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) &&
@@ -482,7 +486,9 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
     }
 
     for (const CallArg& arg : call->m_args) check_expression(arg.m_expr);
-    if (target != nullptr) {
+    if (builtin_serialize) {
+        check_serialize_call(call);
+    } else if (target != nullptr) {
         bind_arguments(target, call, display, receiver_object);
     } else if (const StaticType callee_type = infer_type(call->m_callee); callee_type.m_kind == StaticType::Kind::Function) {
         check_function_value_call(call, callee_type, callee_lambda, display);

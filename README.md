@@ -11,6 +11,7 @@
   - [2. Mutability & Reference Model](#2-mutability--reference-model)
   - [2d. Optional Types (`T?`)](#2d-optional-types-t)
   - [2f. Lambdas, Function Types and Explicit Captures](#2f-lambdas-function-types-and-explicit-captures)
+  - [2g. Serialization and Reflection (`$serialize`)](#2g-serialization-and-reflection-serialize)
   - [3. Explicit Receivers](#3-explicit-receivers)
   - [4. Middle & Trailing Parameter Defaults](#4-middle--trailing-parameter-defaults)
   - [5. Nominal Capability Rulesets & Blueprints](#5-nominal-capability-rulesets--blueprints)
@@ -217,6 +218,42 @@ fn scale(factor: i32) -> i32 {
 - The guarantee covers names written in the body: what a *called* function does with other globals is not tracked.
 - Lambda bodies are borrow-checked like functions (`--check-borrow`). Holding a borrow for as long as the lambda lives
   is not modelled yet, and there is no code generation for lambdas yet.
+
+---
+
+### 2g. Serialization and Reflection (`$serialize`)
+
+A type opts in to serialization with one attribute; there is no per-type boilerplate:
+
+```fool
+$serialize(format = "json")                 // format is json (default), binary or text
+struct Player {
+    id: i32;
+    name: StringView;
+    position: Vec2;                         // must itself be $serialize
+    score: f64?;                            // optionals are written as their value or as null
+    partner: Player?;                       // recursive types are fine
+}
+
+fn save(p: Player) -> StringView {
+    return serialize(p);                    // built-in: any serializable value -> StringView
+}
+```
+
+- `$serialize` applies to classes, structs and enums. Every field (and every variant payload) is checked: numbers, `bool`,
+  `StringView`, optionals of those, generic parameters (judged at instantiation) and other `$serialize` types are fine.
+  Pointers, references and function values are rejected, with the reason, at the field.
+- `serialize(x)` takes exactly one unnamed argument (references are looked through) and has type `StringView`. A type
+  that is not marked `$serialize` is an error that tells you to mark it. A function, variable or global named
+  `serialize` in scope replaces the built-in.
+- `$serialize` is the only `$` directive; `@serialize` is a parse error that says so.
+- Reflection is written with `&`, and works on a type or a variable: `&field_count(T)` (`usize`, classes and structs only),
+  `&type_name(T)` (`StringView`) and `&is_serializable(T)` (`bool`). `&` followed by one of these three names and `(` is always reflection, never
+  address-of (`@field_count(...)` is a parse error). They are type-checked; they are not evaluated at
+  compile time yet.
+- `foolc --dump-reflection file.fl` prints the metadata the checker derived: each `$serialize` type with its format and
+  field count, and for every field whether it is `[ok]` or `[not serializable: reason]`.
+- Limits: there is no code generation, and no `deserialize` yet (it needs a call that takes a type argument).
 
 ---
 
@@ -429,6 +466,7 @@ is a HIR decision that is not made yet.
 | Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented (`name: v` and `name = v` labels) |
 | Optional types `T?`, `null`, flow narrowing | Implemented (front end, checks and cache; no code generation yet) |
 | Lambdas, `fn(...)` types, trailing blocks, explicit `capture=[...]` | Implemented (front end, checks and cache; no code generation yet) |
+| `$serialize`, built-in `serialize(x)`, reflection intrinsics, `--dump-reflection` | Implemented (checks and metadata; no code generation yet) |
 | HIR/MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
@@ -527,6 +565,7 @@ foolc --graph                           # also print the module compilation orde
 foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
 foolc --dump-types file.fl              # inferred type of every expression
+foolc --dump-reflection file.fl         # $serialize metadata: fields and why a field is not serializable
 foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
 foolc examples/01_basics.fl             # parse + local checks for single files

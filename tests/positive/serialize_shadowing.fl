@@ -1,0 +1,15 @@
+// A function or variable named `serialize` takes the place of the built-in.
+
+module tests::positive::serialize_shadowing;
+
+class Opaque {
+    handle: *i32;
+}
+
+fn serialize(o: &Opaque, level: i32) -> i32 {
+    return level;
+}
+
+fn use_it(o: &Opaque) -> i32 {
+    return serialize(o, 3);         // the user's function: two arguments, no $serialize needed
+}

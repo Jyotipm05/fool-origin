@@ -53,6 +53,7 @@ struct Options {
     bool m_werror{false};
     bool m_dump_calls{false};
     bool m_dump_types{false};
+    bool m_dump_reflection{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
@@ -144,6 +145,7 @@ void print_usage() {
         "  -Werror                treat warnings as errors\n"
         "  --dump-calls           print each call's arguments in canonical (ABI) slot order, defaults filled\n"
         "  --dump-types           print the inferred type of every checked expression (line:col-end kind type)\n"
+        "  --dump-reflection      print every class, struct and enum with its fields and whether it can be serialized\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -203,6 +205,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     if (checker.check_module() && options.m_check_borrow) fool::BorrowCheckerPass(pass0, diag).check_module();
     if (options.m_dump_calls && !diag.has_errors()) dump_resolved_calls(checker);
     if (options.m_dump_types && !diag.has_errors()) dump_expression_types(checker);
+    if (options.m_dump_reflection && !diag.has_errors()) std::cout << checker.reflection_report();
 }
 
 struct Expectation {
@@ -348,6 +351,10 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
         std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " types:\n";
         dump_expression_types(checker);
     }
+    if (options.m_dump_reflection && !diag.has_errors()) {
+        std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " reflection:\n";
+        std::cout << checker.reflection_report();
+    }
     return table;
 }
 
@@ -429,6 +436,8 @@ int main(const int argc, char** argv) {
             options.m_dump_calls = true;
         } else if (arg == "--dump-types") {
             options.m_dump_types = true;
+        } else if (arg == "--dump-reflection") {
+            options.m_dump_reflection = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;

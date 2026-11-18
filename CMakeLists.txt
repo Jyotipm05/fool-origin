@@ -34,6 +34,7 @@ add_executable(foolc
         src/Sema/TypeCheckerCasts.cpp
         src/Sema/TypeCheckerOptional.cpp
         src/Sema/TypeCheckerLambda.cpp
+        src/Sema/TypeCheckerSerialize.cpp
         src/Sema/BorrowChecker.cpp
         src/Module/Sha256.cpp
         src/Module/BMICodec.cpp
@@ -266,6 +267,26 @@ if (BUILD_TESTING)
                              -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/types/${TYPE_NAME}.expected
                              -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
             set_tests_properties("foolc_types_${TYPE_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
+        endforeach()
+    endforeach()
+    # 12. Reflection metadata (`--dump-reflection`), same golden-file mechanism.
+    file(GLOB FOOL_REFLECTION_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/reflection/*.fl")
+    foreach(REFLECTION_FILE ${FOOL_REFLECTION_FILES})
+        get_filename_component(REFLECTION_NAME "${REFLECTION_FILE}" NAME_WE)
+        foreach(VARIANT plain roundtrip)
+            set(EXTRA_FLAG "")
+            set(TEST_SUFFIX "")
+            set(TEST_LABELS "reflection")
+            if(VARIANT STREQUAL "roundtrip")
+                set(EXTRA_FLAG "--bmi-roundtrip")
+                set(TEST_SUFFIX "_roundtrip")
+                set(TEST_LABELS "reflection;bmi")
+            endif()
+            add_test(NAME "foolc_reflection_${REFLECTION_NAME}${TEST_SUFFIX}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${REFLECTION_FILE} -DFLAG=--dump-reflection
+                             -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/reflection/${REFLECTION_NAME}.expected
+                             -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+            set_tests_properties("foolc_reflection_${REFLECTION_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
         endforeach()
     endforeach()
     add_test(NAME foolc_calls_project

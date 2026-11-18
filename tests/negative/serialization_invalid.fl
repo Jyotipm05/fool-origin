@@ -1,0 +1,80 @@
+// What $serialize refuses: types with no stable representation, and types that did not opt in.
+
+module tests::negative::serialization_invalid;
+
+class Plain {
+    value: i32;
+}
+
+class StringView {                   // stands in for std::core::StringView in a single-file test
+    length: usize;
+}
+
+$serialize
+struct Good {
+    id: i32;
+}
+
+$serialize
+struct HasPointer {
+    id: i32;
+    next: *Good; // expect-error: field 'next' of $serialize struct 'HasPointer' cannot be serialized: pointers and references
+}
+
+$serialize
+struct HasReference {
+    other: &Good; // expect-error: field 'other' of $serialize struct 'HasReference' cannot be serialized: pointers and references
+}
+
+$serialize
+struct HasFunction {
+    callback: fn(i32) -> i32; // expect-error: function values cannot be serialized
+}
+
+$serialize
+struct HasPlain {
+    inner: Plain; // expect-error: 'Plain' is not marked $serialize
+}
+
+$serialize
+struct HasOptionalPlain {
+    inner: Plain?; // expect-error: 'Plain' is not marked $serialize
+}
+
+$serialize
+class Wrapper<T> {
+    item: T;
+    plain: Plain; // expect-error: 'Plain' is not marked $serialize
+}
+
+$serialize
+enum Message {
+    Text(i32),
+    Raw(*u8), // expect-error: variant 'Raw' of $serialize enum 'Message' cannot be serialized: pointers
+    Other(Plain), // expect-error: variant 'Other' of $serialize enum 'Message' cannot be serialized: 'Plain' is not marked $serialize
+}
+
+fn calls(p: Plain, g: Good, cb: fn(), n: i32?, raw: *Plain) {
+    var a: StringView = serialize(p); // expect-error: cannot serialize a value of type 'Plain': 'Plain' is not marked $serialize
+    var b: StringView = serialize(raw); // expect-error: cannot serialize a value of type '*Plain'
+    var c: StringView = serialize(cb); // expect-error: cannot serialize a value of type 'fn()': function values cannot be serialized
+    var d: StringView = serialize(null); // expect-error: cannot serialize a value of type 'null'
+    var e: StringView = serialize(g, g); // expect-error: 'serialize' takes exactly one value, but 2 were given
+    var f: StringView = serialize(value = g); // expect-error: the argument of 'serialize' cannot be named
+    var ok: StringView = serialize(g);
+    var also_ok: StringView = serialize(n);
+}
+
+fn serialize_wrong_result(g: Good) -> i32 {
+    return serialize(g); // expect-error: cannot convert 'StringView' to 'i32'
+}
+
+fn reflection(p: Plain, g: Good, e: i32) {
+    var a: usize = &field_count(i32); // expect-error: &field_count needs a class or struct, not 'i32'
+    var b: usize = &field_count(Message); // expect-error: &field_count needs a class or struct, not the enum 'Message'
+    var c: usize = &field_count(nothing_here); // expect-error: &field_count: 'nothing_here' is neither a type nor a variable
+    var d: usize = &field_count(); // expect-error: &field_count takes exactly one argument
+    var f: i32 = &field_count(Plain); // expect-error: cannot convert 'usize' to 'i32'
+    var h: bool = &type_name(g); // expect-error: cannot convert 'StringView' to 'bool'
+    var i: StringView = &is_serializable(g); // expect-error: cannot convert 'bool' to 'StringView'
+}

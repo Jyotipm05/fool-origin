@@ -429,6 +429,8 @@ public:
     [[nodiscard]] const ResolvedCall* find_resolved_call(const CallExpr* call) const;
     /// Inferred type of every expression the checker visited (Unknown entries are kept: "could not tell").
     [[nodiscard]] const std::unordered_map<const ExprNode*, StaticType>& expression_types() const { return m_expr_types; }
+    /// Metadata of every class, struct and enum of the module: serialization attribute, fields, and whether each can be serialized.
+    [[nodiscard]] std::string reflection_report() const;
     [[nodiscard]] const StaticType* type_of(const ExprNode* expr) const;
     /// Source-like spelling of a type (`i32`, `const& Buffer`, `integer literal`).
     [[nodiscard]] std::string type_text(const StaticType& type) const { return describe(type); }
@@ -499,6 +501,18 @@ private:
     [[nodiscard]] bool is_enclosing_variable(SymbolID name) const;   ///< a local of the code around the lambda being checked
     /// Inside a lambda: reports a use of a variable (local of the enclosing code, or mutable global) that is not in the capture list.
     bool report_uncaptured(SymbolID name, SourceSpan span);
+
+    // Serialization and reflection (TypeCheckerSerialize.cpp)
+    /// Empty when a value of this declared type can be written out by `serialize`; otherwise the reason it cannot.
+    [[nodiscard]] std::string serialization_problem(const TypeNode* type) const;
+    [[nodiscard]] std::string serialization_problem(const StaticType& type) const;
+    void check_serializable_declarations();
+    [[nodiscard]] bool is_builtin_serialize(SymbolID name);          ///< `serialize` that no user function or variable replaces
+    void check_serialize_call(const CallExpr* call);
+    void check_reflection_intrinsic(const IntrinsicCallExpr* intrinsic);
+    /// The type an intrinsic argument stands for: a type name (`Player`, `i32`) or the type of a value.
+    [[nodiscard]] StaticType intrinsic_subject(const ExprNode* arg);
+    [[nodiscard]] StaticType reflection_result_type(const IntrinsicCallExpr* intrinsic);
     void check_member_access(const MemberExpr* member);
     void check_struct_literal(const StructLiteralExpr* lit);
     void bind_arguments(const FunctionDeclNode* fn, const CallExpr* call, std::string_view display_name,

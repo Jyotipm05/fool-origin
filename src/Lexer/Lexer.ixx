@@ -69,6 +69,7 @@ enum class TokenKind : uint16_t {
     HashImport,      ///< '#import' module import directive
     Question,        ///< '?' optional type suffix
     At,              ///< '@' compile-time attribute directive marker
+    Dollar,          ///< '$' derive-style directive marker ($serialize)
     OpenParen,       ///< '('
     CloseParen,      ///< ')'
     OpenBrace,       ///< '{'

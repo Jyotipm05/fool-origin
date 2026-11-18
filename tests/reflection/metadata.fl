@@ -1,0 +1,35 @@
+// Metadata the compiler records for every type: serialization attribute, fields, and what blocks serialization.
+// Expected output: metadata.expected
+
+module tests::reflection::metadata;
+
+$serialize(format = "json")
+struct Player {
+    id: i32;
+    name: StringView;
+    score: f64?;
+    partner: Player?;
+}
+
+$serialize
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+class Handle {
+    raw: *u8;
+    on_done: fn(i32);
+    inner: Player;
+    plain: Other;
+}
+
+class Other {
+    value: i32;
+}
+
+enum Mixed {
+    Ptr(*i32),
+    Num(i32),
+}

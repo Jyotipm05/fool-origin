@@ -1,0 +1,66 @@
+// $serialize, the built-in serialize(value), and compile-time reflection.
+
+module tests::positive::serialization;
+
+$serialize
+struct Vec2 {
+    x: f32;
+    y: f32;
+}
+
+$serialize(format = "json")
+struct Player {
+    id: i32;
+    name: StringView;
+    alive: bool;
+    position: Vec2;                  // another $serialize type
+    score: f64?;                     // an optional of a serializable type
+    partner: Player?;                // recursive types are fine
+}
+
+$serialize(format = "binary")
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+$serialize
+class Packet<T> {
+    payload: T;                      // judged where the generic class is instantiated
+    seq: u32;
+}
+
+class Scratch {                      // not serialized: it may hold anything
+    cache: *i32;
+    callback: fn(i32) -> i32;
+}
+
+fn send(p: Player, v: Vec2, shape: Shape) -> StringView {
+    var a = serialize(p);            // StringView
+    var b: StringView = serialize(v);
+    var c: StringView = serialize(shape);
+    var d: StringView = serialize(&p);       // writes the player the reference refers to
+    var e: StringView = serialize(p.score);  // an optional is written as its value or as null
+    var f: StringView = serialize(42);
+    var g: StringView = serialize(p.name);
+    return a;
+}
+
+fn reflect(p: Player) -> i32 {
+    var fields: usize = &field_count(Player);
+    var through_value: usize = &field_count(p);
+    var name: StringView = &type_name(p);
+    var prim: StringView = &type_name(i32);
+    var ok: bool = &is_serializable(Player);
+    var not_ok: bool = &is_serializable(Scratch);
+    if (&is_serializable(Vec2)) {
+        return 1;
+    }
+    return 0;
+}
+
+// A user-defined `serialize` replaces the built-in one.
+fn serialize_all(count: i32) -> i32 {
+    return count;
+}

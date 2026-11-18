@@ -272,6 +272,7 @@ namespace fool {
 
         check_type_declarations();
         check_declaration_consistency();
+        check_serializable_declarations();
 
         for (DeclNode *decl: m_pass0.active_declarations()) {
             use_file(m_diag, decl);

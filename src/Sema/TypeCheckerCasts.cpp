@@ -271,7 +271,14 @@ StaticType TypeCheckerPass2::compute_type(const ExprNode* expr) {
         function.m_pointee = std::make_shared<StaticType>(std::move(result));
         return function;
     }
+    if (const auto* intrinsic = dynamic_cast<const IntrinsicCallExpr*>(expr)) return reflection_result_type(intrinsic);
     if (const auto* call = dynamic_cast<const CallExpr*>(expr)) {
+        if (const auto* callee_id = dynamic_cast<const IdentifierExpr*>(call->m_callee); callee_id != nullptr && is_builtin_serialize(callee_id->m_identifier)) {
+            StaticType text; // `serialize(value)` yields the text of the value, as a StringView
+            text.m_kind = Kind::Named;
+            text.m_name = StringInterner::get().intern("StringView");
+            return text;
+        }
         if (const auto* callee_id = dynamic_cast<const IdentifierExpr*>(call->m_callee); callee_id != nullptr && lookup(callee_id->m_identifier) == nullptr) {
             // not a variable: a named function (handled below)
         } else {

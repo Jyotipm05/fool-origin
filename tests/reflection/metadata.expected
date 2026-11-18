@@ -1,0 +1,19 @@
+struct Player: serialize format=json fields=4
+  id: i32 [ok]
+  name: StringView [ok]
+  score: f64? [ok]
+  partner: Player? [ok]
+enum Shape: serialize format=json variants=3
+  Circle(f64) [ok]
+  Rect(f64, f64) [ok]
+  Empty [ok]
+class Handle: not serialized fields=4
+  raw: *u8 [not serializable: pointers and references have no stable representation outside the running program]
+  on_done: fn(i32) [not serializable: function values cannot be serialized]
+  inner: Player [ok]
+  plain: Other [not serializable: 'Other' is not marked $serialize; add it to its declaration]
+class Other: not serialized fields=1
+  value: i32 [ok]
+enum Mixed: not serialized variants=2
+  Ptr(*i32) [not serializable: pointers and references have no stable representation outside the running program]
+  Num(i32) [ok]

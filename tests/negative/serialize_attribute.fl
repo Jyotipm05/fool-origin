@@ -1,0 +1,28 @@
+// $serialize is for classes, structs and enums, and takes only a known `format`.
+
+module tests::negative::serialize_attribute;
+
+$serialize(format = "xml") // expect-error: unknown $serialize format 'xml' (expected json, binary or text)
+struct A {
+    id: i32;
+}
+
+$serialize(json) // expect-error: $serialize accepts only 'format
+struct B {
+    id: i32;
+}
+
+$serialize(level = "1") // expect-error: $serialize accepts only 'format
+struct C {
+    id: i32;
+}
+
+$serialize // expect-error: $serialize applies to classes, structs and enums
+fn not_a_type() {
+    return;
+}
+
+@serialise // expect-error: unknown attribute '@serialise' (expected target, extern, inline or align_as)
+struct D {
+    id: i32;
+}

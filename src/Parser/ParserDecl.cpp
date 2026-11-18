@@ -75,6 +75,7 @@ bool starts_declaration(TokenKind k) {
         case TokenKind::KwConstx:
         case TokenKind::HashImport:
         case TokenKind::At:
+        case TokenKind::Dollar:
         case TokenKind::Eof:
             return true;
         default:
@@ -183,10 +184,19 @@ ImportDeclNode* Parser::parse_import() {
 
 AttributeNode Parser::parse_attribute() {
     SourceLocation start = current().m_span.m_start;
-    advance(); // '@'
+    const bool dollar = check(TokenKind::Dollar);
+    advance(); // '@' or '$'
     AttributeNode attr;
-    Token name = consume(TokenKind::Identifier, "Expected attribute name after '@'");
+    Token name = consume(TokenKind::Identifier, dollar ? "Expected directive name after '$'" : "Expected attribute name after '@'");
     attr.m_name = name.m_symbol_id;
+    if (name.m_kind != TokenKind::Invalid) {
+        const std::string_view text = StringInterner::get().resolve(name.m_symbol_id);
+        if (dollar && text != "serialize") {
+            error(name.m_span, "unknown directive '$" + std::string(text) + "' (the only '$' directive is $serialize)");
+        } else if (!dollar && text == "serialize") {
+            error(name.m_span, "serialization is written '$serialize', not '@serialize'");
+        }
+    }
 
     if (match(TokenKind::OpenParen)) {
         while (!check(TokenKind::CloseParen) && !is_at_end()) {
@@ -227,7 +237,7 @@ DeclNode* Parser::parse_declaration() {
     SourceLocation start = current().m_span.m_start;
     std::vector<AttributeNode> attrs;
 
-    while (check(TokenKind::At)) {
+    while (check(TokenKind::At) || check(TokenKind::Dollar)) {
         const Token& next = peek();
         if (next.m_kind == TokenKind::KwIf) {
             return parse_conditional_decl(std::move(attrs));
@@ -522,7 +532,7 @@ ClassDeclNode* Parser::parse_class(bool is_struct) {
     while (!check(TokenKind::CloseBrace) && !is_at_end()) {
         size_t before = m_cursor;
         std::vector<AttributeNode> attrs;
-        while (check(TokenKind::At)) attrs.push_back(parse_attribute());
+        while (check(TokenKind::At) || check(TokenKind::Dollar)) attrs.push_back(parse_attribute());
 
         bool is_async = check(TokenKind::KwAsync);
         if (is_async) advance();

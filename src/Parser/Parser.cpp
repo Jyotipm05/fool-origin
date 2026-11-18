@@ -177,9 +177,20 @@ ExprNode* Parser::parse_expression(int min_precedence) {
     return lhs;
 }
 
+/// `&field_count(T)`, `&type_name(x)` and `&is_serializable(T)`: reflection is written with '&', not '@'.
+static bool is_reflection_intrinsic(std::string_view name) {
+    return name == "field_count" || name == "type_name" || name == "is_serializable";
+}
+
 ExprNode* Parser::parse_unary() {
     SourceLocation start = current().m_span.m_start;
     TokenKind k = current().m_kind;
+    // `&field_count(...)`, `&type_name(...)`, `&is_serializable(...)`: reflection, not address-of.
+    if (k == TokenKind::Ampersand && peek().m_kind == TokenKind::Identifier && peek(2).m_kind == TokenKind::OpenParen &&
+        is_reflection_intrinsic(StringInterner::get().resolve(peek().m_symbol_id))) {
+        ExprNode* call = parse_intrinsic_call();
+        return call == nullptr ? nullptr : parse_postfix(call);
+    }
     if (k == TokenKind::Bang || k == TokenKind::Minus || k == TokenKind::Ampersand ||
         k == TokenKind::Star || k == TokenKind::KwAwait) {
         advance();
@@ -395,9 +406,14 @@ bool Parser::looks_like_struct_body() const {
 
 ExprNode* Parser::parse_intrinsic_call() {
     SourceLocation start = current().m_span.m_start;
-    advance(); // '@'
+    const bool reflection = check(TokenKind::Ampersand);
+    advance(); // '@' or '&'
     Token name = consume(TokenKind::Identifier, "Expected intrinsic name after '@'");
     if (name.m_kind == TokenKind::Invalid) return nullptr;
+    if (!reflection && is_reflection_intrinsic(StringInterner::get().resolve(name.m_symbol_id))) {
+        error(name.m_span, "reflection is written with '&': use '&" +
+              std::string(StringInterner::get().resolve(name.m_symbol_id)) + "(...)'");
+    }
 
     // Named casts: @static_cast<T>(expr), @dynamic_cast<T>(expr), @reinterpret_cast<T>(expr), @bit_cast<T>(expr).
     const std::string_view intrinsic_name = StringInterner::get().resolve(name.m_symbol_id);

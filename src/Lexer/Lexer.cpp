@@ -55,6 +55,7 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::Hash: return "#";
         case TokenKind::HashImport: return "#import";
         case TokenKind::At: return "@";
+        case TokenKind::Dollar: return "$";
         case TokenKind::Question: return "?";
         case TokenKind::OpenParen: return "(";
         case TokenKind::CloseParen: return ")";
@@ -281,6 +282,7 @@ Token Lexer::next_token() {
 
     switch (c) {
         case '@': return make_token(TokenKind::At, start);
+        case '$': return make_token(TokenKind::Dollar, start);
         case '?': return make_token(TokenKind::Question, start);
         case '(': return make_token(TokenKind::OpenParen, start);
         case ')': return make_token(TokenKind::CloseParen, start);

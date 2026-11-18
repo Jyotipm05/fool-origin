@@ -173,6 +173,17 @@ void SymbolTablePass0::validate_attributes(const DeclNode* decl) {
             if (attr.m_args.empty()) {
                 m_diag.error(attr.m_span, "@extern requires an ABI name, e.g. @extern(\"C\")");
             }
+        } else if (name == "serialize") {
+            if (dynamic_cast<const ClassDeclNode*>(decl) == nullptr && dynamic_cast<const EnumDeclNode*>(decl) == nullptr) {
+                m_diag.error(attr.m_span, "$serialize applies to classes, structs and enums");
+            }
+            for (const AttributeArg& arg : attr.m_args) {
+                if (arg.m_key == INVALID_SYMBOL_ID || text_of(arg.m_key) != "format") {
+                    m_diag.error(attr.m_span, "$serialize accepts only 'format = \"json\"', 'format = \"binary\"' or 'format = \"text\"'");
+                } else if (arg.m_value != "json" && arg.m_value != "binary" && arg.m_value != "text") {
+                    m_diag.error(attr.m_span, "unknown $serialize format '" + std::string(arg.m_value) + "' (expected json, binary or text)");
+                }
+            }
         } else if (name != "inline" && name != "align_as") {
             m_diag.error(attr.m_span, "unknown attribute '@" + std::string(name) +
                                       "' (expected target, extern, inline or align_as)");

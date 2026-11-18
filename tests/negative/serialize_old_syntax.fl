@@ -1,0 +1,19 @@
+// Serialization is written `$serialize` and reflection `&name(...)`; the old '@' spellings are parse errors.
+
+module tests::negative::serialize_old_syntax;
+
+@serialize // expect-error: serialization is written '$serialize', not '@serialize'
+struct A {
+    id: i32;
+}
+
+$derive // expect-error: unknown directive '$derive' (the only '$' directive is $serialize)
+struct B {
+    id: i32;
+}
+
+fn use_them(a: A) -> usize {
+    var n: usize = @field_count(A); // expect-error: reflection is written with '&': use '&field_count(...)'
+    var s: usize = @type_name(a); // expect-error: reflection is written with '&': use '&type_name(...)'
+    return n;
+}
