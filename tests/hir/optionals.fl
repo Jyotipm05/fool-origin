@@ -1,0 +1,51 @@
+// HIR v1: `T` -> `T?` is a Wrap, a narrowed `T?` used as `T` is an Unwrap, `null` has its optional type,
+// and a condition on an optional is a test against null. Expected output: optionals.expected
+
+module tests::hir::optionals;
+
+class Node {
+    id: i32;
+    next: Node?;
+}
+
+fn first(n: Node?) -> i32 {
+    if (n) {
+        return n.id;
+    }
+    return 0;
+}
+
+fn wrap(id: i32) -> Node? {
+    return Node { id: id };         // `next` is omitted: it starts as null
+}
+
+fn nothing() -> Node? {
+    return null;
+}
+
+fn is_empty(n: Node?) -> bool {
+    return !n;
+}
+
+fn has_value(n: Node?) -> bool {
+    return n != null;
+}
+
+fn store(id: i32) {
+    var n: Node? = Node { id: id };
+    n = null;
+    var m: i32? = 5;
+    var plain: i32 = 3;
+    m = plain;
+}
+
+fn follow(n: Node?) -> i32 {
+    if (n == null) {
+        return 0;
+    }
+    var rest = n.next;
+    if (rest) {
+        return rest.id;
+    }
+    return n.id;
+}

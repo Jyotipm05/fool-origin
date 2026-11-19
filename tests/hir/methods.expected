@@ -1,0 +1,34 @@
+fn Counter::bump(self: &Counter, by: i32, times: i32) -> i32 {
+  (= (field (deref self#0) .value) (+ (field (deref self#0) .value) (* by#1 times#2)));
+  return (field (deref self#0) .value);
+}
+
+fn Counter::get(self: const& Counter) -> i32 {
+  return (field (deref self#0) .value);
+}
+
+fn Counter::consume(self: Counter) -> i32 {
+  return (cast.unchecked:i32 (field (field self#0 .origin) .x));
+}
+
+fn scale(v: &Vec2, k: f32) {
+  (= (field (deref v#0) .x) (* (field (deref v#0) .x) k#1));
+  (= (field (deref v#0) .y) (* (field (deref v#0) .y) k#1));
+}
+
+fn render(x: f32, y: f32, scale: f32, width: f32, height: f32) -> i32 {
+  return 0:i32;
+}
+
+fn use_counter(p: &Counter) -> i32 {
+  let c#1: Counter = (new Counter 1:i32 (new Vec2 0.0:f32 1.5:f32));
+  let a#2: i32 = (call Counter::bump (addr c#1) 1:i32 2:i32);
+  let b#3: i32 = (call Counter::bump p#0 5:i32 6:i32);
+  let g#4: i32 = (call Counter::get (convert:const& Counter (addr c#1)));
+  let h#5: i32 = (call Counter::get (convert:const& Counter p#0));
+  (call render 10.0:f32 20.0:f32 1.0:f32 100.0:f32 200.0:f32);
+  (call render 1.0:f32 2.0:f32 1.0:f32 3.0:f32 4.0:f32);
+  (call scale (addr (field c#1 .origin)) 2.0:f32);
+  return (+ (+ (+ (+ a#2 b#3) g#4) h#5) (call Counter::consume c#1));
+}
+// 6 of 6 function(s) lowered

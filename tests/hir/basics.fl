@@ -1,0 +1,111 @@
+// HIR v1: literals take their context's type, conversions are explicit, names are resolved.
+// Expected output: basics.expected
+
+module tests::hir::basics;
+
+constx LIMIT: u8 = 200 + 55;
+var counter: i32 = 0;
+
+fn add(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn widen(a: i32, b: i64, c: f32) -> f64 {
+    var sum = a + b;            // i32 widens to i64
+    var half: f64 = c;          // f32 widens to f64
+    return half + 0.5;
+}
+
+fn defaults() {
+    var small = 1;              // an untyped literal defaults to i32
+    var real = 2.5;             // ... and to f64
+    var big = 5000000000;       // too large for i32: i64
+    var byte: u8 = 7;           // the declared type wins
+    var scaled: f32 = 3;        // an integer literal adapts to a floating-point type
+    implicit = small + 41;      // `x = value;` declares a mutable local
+    const frozen = 9;
+    return;
+}
+
+fn limit() -> u8 {
+    return LIMIT;               // a global
+}
+
+fn loops(n: i32) -> i32 {
+    var total = 0;
+    var i = 0;
+    while (i < n) {
+        if (i == 3) {
+            i = i + 1;
+            continue;
+        }
+        total = total + i;
+        i = i + 1;
+        if (total > 100) {
+            break;
+        }
+    }
+    return total;
+}
+
+fn chain(x: i32) -> i32 {
+    if (x < 0) {
+        return 0;
+    } else if (x == 0) {
+        return 1;
+    } else {
+        return 2;
+    }
+}
+
+fn bump_global() {
+    counter = counter + 1;
+}
+
+fn logic(a: bool, b: bool) -> bool {
+    return !a || b && a;
+}
+
+fn negate(x: i32) -> i32 {
+    return -x + -1;
+}
+
+fn compile_time() -> i32 {
+    @if (def(MISSING)) {
+        return 1;
+    } @else {
+        return 2;
+    }
+}
+
+fn casts(x: i32, p: *u8) -> f64 {
+    var a = x as i64;
+    var b = @static_cast<f64>(x);
+    var addr = @reinterpret_cast<usize>(p);
+    return b;
+}
+
+fn pointers(p: *i32, q: &i32, i: usize) -> i32 {
+    var first = *p;
+    var second = *q;
+    var third = p[i];
+    var r: &i32 = &first;
+    return first + second + third;
+}
+
+fn retyped(flag: bool) -> f32 {
+    sum = 0;                    // typed f32 by the `return` below: the literal becomes 0.0
+    if (flag) {
+        total = 1;
+        total = total + 2;      // stays i32
+    }
+    return sum;
+}
+
+fn takes_bytes(p: const* u8, n: usize) -> i32 {
+    return 0;
+}
+
+fn literal_text() -> i32 {
+    return takes_bytes("hello", 5);     // a string literal doubles as `const* u8`
+}

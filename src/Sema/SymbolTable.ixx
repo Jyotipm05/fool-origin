@@ -427,6 +427,8 @@ public:
     /// Calls whose arguments were bound without errors, with canonical slot order and defaults filled.
     [[nodiscard]] const std::vector<ResolvedCall>& resolved_calls() const { return m_resolved_calls; }
     [[nodiscard]] const ResolvedCall* find_resolved_call(const CallExpr* call) const;
+    /// The branch of a compile-time `@if` / `@elif` / `@else` statement that is active for the target, or nullptr when none is.
+    [[nodiscard]] const ConditionalBranch* active_branch(const ConditionalStmt* stmt) const { return select_branch(stmt, false); }
     /// Inferred type of every expression the checker visited (Unknown entries are kept: "could not tell").
     [[nodiscard]] const std::unordered_map<const ExprNode*, StaticType>& expression_types() const { return m_expr_types; }
     /// Metadata of every class, struct and enum of the module: serialization attribute, fields, and whether each can be serialized.

@@ -1,0 +1,52 @@
+// HIR v1: calls list their arguments in parameter order with defaults filled in, the receiver first;
+// member access goes through explicit dereferences. Expected output: methods.expected
+
+module tests::hir::methods;
+
+class Vec2 {
+    x: f32;
+    y: f32;
+}
+
+class Counter {
+    value: i32;
+    origin: Vec2;
+
+    fn bump(this &self, by: i32 = 1, times: i32) -> i32;
+    fn get(this const& self) -> i32;
+    fn consume(this self) -> i32;
+}
+
+fn Counter::bump(this &self, by: i32 = 1, times: i32) -> i32 {
+    self.value = self.value + by * times;
+    return self.value;
+}
+
+fn Counter::get(this const& self) -> i32 {
+    return self.value;
+}
+
+fn Counter::consume(this self) -> i32 {
+    return self.origin.x as i32;
+}
+
+fn scale(v: &Vec2, k: f32) {
+    v.x = v.x * k;
+    v.y = v.y * k;
+}
+
+fn render(x: f32, y: f32, scale: f32 = 1, width: f32, height: f32) -> i32 {
+    return 0;
+}
+
+fn use_counter(p: &Counter) -> i32 {
+    var c = Counter { value: 1, origin: Vec2 { x: 0.0, y: 1.5 } };
+    var a = c.bump(times: 2);       // `by` is filled with its default
+    var b = p.bump(5, 6);           // already a reference: passed as is
+    var g = c.get();                // a value: its address is taken
+    var h = p.get();
+    render(10, 20, width: 100, height: 200);
+    render(height: 4, width: 3, y: 2, x: 1);
+    scale(&c.origin, 2.0);
+    return a + b + g + h + c.consume();
+}

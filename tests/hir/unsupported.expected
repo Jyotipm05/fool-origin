@@ -1,0 +1,16 @@
+fn identity: not lowerable yet: generic function (generics instantiation is not implemented) (line 15)
+
+fn lambda_user: not lowerable yet: lambdas (closure conversion is not implemented) (line 20)
+
+fn for_loop: not lowerable yet: 'for' loops (the iteration protocol is not defined yet) (line 24)
+
+fn enum_variant: not lowerable yet: qualified paths such as enum variants (not lowerable yet) (line 30)
+
+fn unseen_type: not lowerable yet: cannot resolve type 'StringView' (generic parameters and types of modules that are not loaded are not lowerable yet) (line 33)
+
+fn fine() -> i32 {
+  return 7:i32;
+}
+
+fn calls_generic: not lowerable yet: call of generic function 'identity' (generics instantiation is not implemented) (line 42)
+// 1 of 7 function(s) lowered

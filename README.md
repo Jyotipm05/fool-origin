@@ -390,6 +390,7 @@ fool-origin/
 │   ├── AST/                   # Arena-allocated AST nodes & statements
 │   ├── Parser/                # Pratt & recursive descent parser with error recovery
 │   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker, borrow checker
+│   ├── HIR/                   # HIR v1: typed, resolved, desugared function bodies lowered from the checked AST
 │   ├── Module/                # `.flbmi` cache: SHA-256, binary parse-tree codec, on-disk cache manager
 │   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
 ├── stdlib/                    # Standard Library (52 files across 7 subsystems)
@@ -448,8 +449,43 @@ which must be `bool`. `!` is logical not on a `bool` and bitwise complement on a
 
 The check is deliberately conservative: a type the checker cannot determine (generic parameters, names from modules it
 cannot see, results of unresolved calls) is never reported, so a missed error is possible but a wrong one should not be.
-An unannotated `var x = 1;` keeps the type "integer literal" (adapting to later uses); defaulting it to a concrete width
-is a HIR decision that is not made yet.
+An unannotated `var x = 1;` keeps the type "integer literal" (adapting to later uses) here; the width it ends up with
+is decided by HIR lowering (see "HIR v1" below).
+
+### HIR v1
+
+`foolc --dump-hir file.fl` lowers every function the checker accepted into the high-level IR and prints it
+(`src/HIR/`). Compared with the AST, the HIR has settled everything a back end would otherwise have to guess:
+
+- **One concrete type per expression.** A literal takes the type of its context (`x: u8 = 7`, `scale: f32 = 3`,
+  `n + 1` with `n: i64`) and defaults to `i32` / `f64`; a local such as `sum = 0;` that a later use needs as another
+  numeric type (`return sum;` in a function returning `f32`) gets that type. A string literal is a `StringView`,
+  or `const* u8` where one is expected.
+- **Names are resolved:** locals by index (`x#2`, shadowing is gone), globals (`::counter`), callees.
+- **Conversions are explicit:** widening, `&T` <-> `*T`, adding `const`, `T` -> `T?` (`wrap`), a narrowed `T?` used as `T`
+  (`unwrap`), `a != null` for a condition on an optional, and the four cast spellings.
+- **Calls list their arguments in parameter order** with defaults filled in (labels are gone) and the receiver first;
+  a method called on a value takes its address, one called through a view passes it on.
+- **Member access is explicit:** `p.x` with `p: &T` is `(field (deref p) .x)`; an omitted optional field is `null`.
+- **Compile-time `@if` is gone:** only the active branch remains, as a block.
+
+```text
+fn Counter::bump(self: &Counter, by: i32, times: i32) -> i32 {
+  (= (field (deref self#0) .value) (+ (field (deref self#0) .value) (* by#1 times#2)));
+  return (field (deref self#0) .value);
+}
+
+fn use_counter(p: &Counter) -> i32 {
+  let c#1: Counter = (new Counter 1:i32 (new Vec2 0.0:f32 1.5:f32));
+  let a#2: i32 = (call Counter::bump (addr c#1) 1:i32 2:i32);      // `by` filled with its default
+  ...
+```
+
+Only the monomorphic subset is lowered. A function that needs something else is kept as
+`fn name: not lowerable yet: <reason> (line N)` instead of being skipped: generics (and methods of generic types),
+lambdas, `for` loops, enum variants and other qualified paths, async functions, reflection intrinsics, function
+values, calls the checker could not bind, and types from modules that are not loaded. The last line of the dump
+counts how many functions were lowered. There is no MIR and no code generation yet.
 
 ### Implementation status
 
@@ -467,7 +503,8 @@ is a HIR decision that is not made yet.
 | Optional types `T?`, `null`, flow narrowing | Implemented (front end, checks and cache; no code generation yet) |
 | Lambdas, `fn(...)` types, trailing blocks, explicit `capture=[...]` | Implemented (front end, checks and cache; no code generation yet) |
 | `$serialize`, built-in `serialize(x)`, reflection intrinsics, `--dump-reflection` | Implemented (checks and metadata; no code generation yet) |
-| HIR/MIR, code generation | **Planned** |
+| HIR v1 (`--dump-hir`): typed, resolved, desugared bodies of the monomorphic subset | Implemented (see above; unsupported functions are reported, not skipped) |
+| MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
@@ -565,6 +602,7 @@ foolc --graph                           # also print the module compilation orde
 foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
 foolc --dump-types file.fl              # inferred type of every expression
+foolc --dump-hir file.fl                # lowered HIR of every function (or why it is not lowerable yet)
 foolc --dump-reflection file.fl         # $serialize metadata: fields and why a field is not serializable
 foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)

@@ -1,0 +1,43 @@
+// What HIR v1 does not lower yet is kept with its reason instead of being skipped.
+// Expected output: unsupported.expected
+
+module tests::hir::unsupported;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+class Box<T> {
+    item: T;
+}
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn lambda_user() {
+    f = (x: i32) -> i32 { return x; };
+}
+
+fn for_loop() {
+    for step in 0..3 {
+        var skipped = step;
+    }
+}
+
+fn enum_variant() {
+    var s = Shape::Empty;
+}
+
+fn unseen_type(text: StringView) {
+    return;
+}
+
+fn fine() -> i32 {
+    return 7;
+}
+
+fn calls_generic() -> i32 {
+    return identity(3);
+}

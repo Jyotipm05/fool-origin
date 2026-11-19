@@ -35,6 +35,7 @@ import fool.ast;
 import fool.parser;
 import fool.sema;
 import fool.borrow;
+import fool.hir;
 import fool.bmi;
 
 namespace {
@@ -54,6 +55,7 @@ struct Options {
     bool m_dump_calls{false};
     bool m_dump_types{false};
     bool m_dump_reflection{false};
+    bool m_dump_hir{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
@@ -146,6 +148,7 @@ void print_usage() {
         "  --dump-calls           print each call's arguments in canonical (ABI) slot order, defaults filled\n"
         "  --dump-types           print the inferred type of every checked expression (line:col-end kind type)\n"
         "  --dump-reflection      print every class, struct and enum with its fields and whether it can be serialized\n"
+        "  --dump-hir             lower the checked functions to HIR and print it (unsupported ones are listed with the reason)\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -206,6 +209,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     if (options.m_dump_calls && !diag.has_errors()) dump_resolved_calls(checker);
     if (options.m_dump_types && !diag.has_errors()) dump_expression_types(checker);
     if (options.m_dump_reflection && !diag.has_errors()) std::cout << checker.reflection_report();
+    if (options.m_dump_hir && !diag.has_errors()) std::cout << fool::hir::dump(fool::hir::lower_module(checker, pass0));
 }
 
 struct Expectation {
@@ -355,6 +359,10 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
         std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " reflection:\n";
         std::cout << checker.reflection_report();
     }
+    if (options.m_dump_hir && !diag.has_errors()) {
+        std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " hir:\n";
+        std::cout << fool::hir::dump(fool::hir::lower_module(checker, *table));
+    }
     return table;
 }
 
@@ -438,6 +446,8 @@ int main(const int argc, char** argv) {
             options.m_dump_types = true;
         } else if (arg == "--dump-reflection") {
             options.m_dump_reflection = true;
+        } else if (arg == "--dump-hir") {
+            options.m_dump_hir = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;

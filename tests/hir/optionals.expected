@@ -1,0 +1,42 @@
+fn first(n: Node?) -> i32 {
+  if (!= n#0 null:Node?) {
+    return (field (unwrap n#0) .id);
+  }
+  return 0:i32;
+}
+
+fn wrap(id: i32) -> Node? {
+  return (wrap:Node? (new Node id#0 null:Node?));
+}
+
+fn nothing() -> Node? {
+  return null:Node?;
+}
+
+fn is_empty(n: Node?) -> bool {
+  return (== n#0 null:Node?);
+}
+
+fn has_value(n: Node?) -> bool {
+  return (!= n#0 null:Node?);
+}
+
+fn store(id: i32) {
+  let n#1: Node? = (wrap:Node? (new Node id#0 null:Node?));
+  (= n#1 null:Node?);
+  let m#2: i32? = (wrap:i32? 5:i32);
+  let plain#3: i32 = 3:i32;
+  (= m#2 (wrap:i32? plain#3));
+}
+
+fn follow(n: Node?) -> i32 {
+  if (== n#0 null:Node?) {
+    return 0:i32;
+  }
+  let rest#1: Node? = (field (unwrap n#0) .next);
+  if (!= rest#1 null:Node?) {
+    return (field (unwrap rest#1) .id);
+  }
+  return (field (unwrap n#0) .id);
+}
+// 7 of 7 function(s) lowered

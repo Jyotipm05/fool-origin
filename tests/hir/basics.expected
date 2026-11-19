@@ -1,0 +1,104 @@
+fn add(a: i32, b: i32) -> i32 {
+  return (+ a#0 b#1);
+}
+
+fn widen(a: i32, b: i64, c: f32) -> f64 {
+  let sum#3: i64 = (+ (convert:i64 a#0) b#1);
+  let half#4: f64 = (convert:f64 c#2);
+  return (+ half#4 0.5:f64);
+}
+
+fn defaults() {
+  let small#0: i32 = 1:i32;
+  let real#1: f64 = 2.5:f64;
+  let big#2: i64 = 5000000000:i64;
+  let byte#3: u8 = 7:u8;
+  let scaled#4: f32 = 3.0:f32;
+  let implicit#5: i32 = (+ small#0 41:i32);
+  const frozen#6: i32 = 9:i32;
+  return;
+}
+
+fn limit() -> u8 {
+  return ::LIMIT;
+}
+
+fn loops(n: i32) -> i32 {
+  let total#1: i32 = 0:i32;
+  let i#2: i32 = 0:i32;
+  while (< i#2 n#0) {
+    if (== i#2 3:i32) {
+      (= i#2 (+ i#2 1:i32));
+      continue;
+    }
+    (= total#1 (+ total#1 i#2));
+    (= i#2 (+ i#2 1:i32));
+    if (> total#1 100:i32) {
+      break;
+    }
+  }
+  return total#1;
+}
+
+fn chain(x: i32) -> i32 {
+  if (< x#0 0:i32) {
+    return 0:i32;
+  } else {
+    if (== x#0 0:i32) {
+      return 1:i32;
+    } else {
+      return 2:i32;
+    }
+  }
+}
+
+fn bump_global() {
+  (= ::counter (+ ::counter 1:i32));
+}
+
+fn logic(a: bool, b: bool) -> bool {
+  return (|| (not a#0) (&& b#1 a#0));
+}
+
+fn negate(x: i32) -> i32 {
+  return (+ (neg x#0) (neg 1:i32));
+}
+
+fn compile_time() -> i32 {
+  {
+    return 2:i32;
+  }
+}
+
+fn casts(x: i32, p: *u8) -> f64 {
+  let a#2: i64 = (cast.unchecked:i64 x#0);
+  let b#3: f64 = (cast.static:f64 x#0);
+  let addr#4: usize = (cast.reinterpret:usize p#1);
+  return b#3;
+}
+
+fn pointers(p: *i32, q: &i32, i: usize) -> i32 {
+  let first#3: i32 = (deref p#0);
+  let second#4: i32 = (deref q#1);
+  let third#5: i32 = (index p#0 i#2);
+  let r#6: &i32 = (addr first#3);
+  return (+ (+ first#3 second#4) third#5);
+}
+
+fn retyped(flag: bool) -> f32 {
+  let sum#1: f32 = 0.0:f32;
+  if flag#0 {
+    let total#2: i32 = 1:i32;
+    (= total#2 (+ total#2 2:i32));
+  }
+  return sum#1;
+}
+
+fn takes_bytes(p: const* u8, n: usize) -> i32 {
+  return 0:i32;
+}
+
+fn literal_text() -> i32 {
+  return (call takes_bytes "hello" 5:usize);
+}
+// 15 of 15 function(s) lowered

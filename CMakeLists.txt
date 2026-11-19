@@ -36,6 +36,8 @@ add_executable(foolc
         src/Sema/TypeCheckerLambda.cpp
         src/Sema/TypeCheckerSerialize.cpp
         src/Sema/BorrowChecker.cpp
+        src/HIR/HIR.cpp
+        src/HIR/Lower.cpp
         src/Module/Sha256.cpp
         src/Module/BMICodec.cpp
         src/Module/BMICache.cpp
@@ -55,6 +57,7 @@ target_sources(foolc
         src/Parser/Parser.ixx
         src/Sema/SymbolTable.ixx
         src/Sema/BorrowChecker.ixx
+        src/HIR/HIR.ixx
         src/Module/BMICache.ixx
 )
 
@@ -287,6 +290,26 @@ if (BUILD_TESTING)
                              -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/reflection/${REFLECTION_NAME}.expected
                              -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
             set_tests_properties("foolc_reflection_${REFLECTION_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
+        endforeach()
+    endforeach()
+    # 13. HIR lowering (`--dump-hir`), same golden-file mechanism.
+    file(GLOB FOOL_HIR_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/hir/*.fl")
+    foreach(HIR_FILE ${FOOL_HIR_FILES})
+        get_filename_component(HIR_NAME "${HIR_FILE}" NAME_WE)
+        foreach(VARIANT plain roundtrip)
+            set(EXTRA_FLAG "")
+            set(TEST_SUFFIX "")
+            set(TEST_LABELS "hir")
+            if(VARIANT STREQUAL "roundtrip")
+                set(EXTRA_FLAG "--bmi-roundtrip")
+                set(TEST_SUFFIX "_roundtrip")
+                set(TEST_LABELS "hir;bmi")
+            endif()
+            add_test(NAME "foolc_hir_${HIR_NAME}${TEST_SUFFIX}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${HIR_FILE} -DFLAG=--dump-hir
+                             -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/hir/${HIR_NAME}.expected
+                             -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+            set_tests_properties("foolc_hir_${HIR_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
         endforeach()
     endforeach()
     add_test(NAME foolc_calls_project
