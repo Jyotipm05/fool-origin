@@ -481,11 +481,31 @@ fn use_counter(p: &Counter) -> i32 {
   ...
 ```
 
-Only the monomorphic subset is lowered. A function that needs something else is kept as
-`fn name: not lowerable yet: <reason> (line N)` instead of being skipped: generics (and methods of generic types),
-lambdas, `for` loops, enum variants and other qualified paths, async functions, reflection intrinsics, function
-values, calls the checker could not bind, and types from modules that are not loaded. The last line of the dump
-counts how many functions were lowered. There is no MIR and no code generation yet.
+Generics are **monomorphized**. A generic function (`identity<T>`), a method of a generic type (`Box<T>::get`) and
+a generic class (`Box<i32>` is its own instance type with its own field types) are lowered once per set of type
+arguments that a call or a type mentions, starting from the non-generic functions; the generic declaration itself stays
+in the dump as `fn identity<T>: generic template`. Type arguments come from the call's arguments (`identity(3)` is
+`identity<i32>`, `larger(wide, 3)` is `larger<i64>` because the literal adapts), from the receiver (`boxed.get()` on a
+`Box<i32>`) or from written arguments (`Box<i64>::make(6)`); a literal takes the type another argument already fixed. An
+instance is named by its arguments (`Box<Box<bool>>::make`), is lowered once however many calls ask for it, and may
+itself request further instances (a generic function calling `Box<T>::make`). At most 1024 instances are made.
+
+```text
+let a#3: i32 = (call identity<i32> 3:i32);
+let wide_box#11: Box<i64> = (call Box<i64>::make 6:i64);
+let value#10: i32 = (call Box<i32>::get (convert:const& Box<i32> (addr boxed#9)));
+...
+fn Box<i32>::get(self: const& Box<i32>) -> i32 {
+  return (field (deref self#0) .item);
+}
+```
+
+What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, `for`
+loops, enum variants and other qualified paths, generic enums, constant generic arguments, async functions, reflection
+intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
+loaded (instantiation needs the definition's body, so a generic defined in another module is not instantiated yet), and
+calls on a struct literal receiver (the checker does not bind them). The last line of the dump counts how many
+functions were lowered and how many generic templates there are. There is no MIR and no code generation yet.
 
 ### Implementation status
 
@@ -496,14 +516,14 @@ counts how many functions were lowered. There is no MIR and no code generation y
 | Pass 1 module graph, import templates, cycle detection | Implemented |
 | Pass 2 checks listed above, named casts | Implemented (name/type resolution is structural, not a full type system) |
 | Expression types and implicit-conversion checks (`--dump-types`) | Implemented (conservative, see above) |
-| Generics instantiation | Not implemented |
+| Generics instantiation | Implemented in HIR lowering (monomorphization, see "HIR v1"); the checker still treats generic parameters as unknown types |
 | Opt-in borrow checker (`--check-borrow`) | Implemented (intra-procedural, see below) |
 | BMI cache (`.flbmi`): SHA-256 keyed parse-tree cache (`--cache`) | Implemented (see below) |
 | Bound calls: canonical argument slots, defaults filled (`--dump-calls`) | Implemented (`name: v` and `name = v` labels) |
 | Optional types `T?`, `null`, flow narrowing | Implemented (front end, checks and cache; no code generation yet) |
 | Lambdas, `fn(...)` types, trailing blocks, explicit `capture=[...]` | Implemented (front end, checks and cache; no code generation yet) |
 | `$serialize`, built-in `serialize(x)`, reflection intrinsics, `--dump-reflection` | Implemented (checks and metadata; no code generation yet) |
-| HIR v1 (`--dump-hir`): typed, resolved, desugared bodies of the monomorphic subset | Implemented (see above; unsupported functions are reported, not skipped) |
+| HIR v1 (`--dump-hir`): typed, resolved, desugared bodies, generics monomorphized | Implemented (see above; unsupported functions are reported, not skipped) |
 | MIR, code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.

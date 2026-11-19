@@ -93,6 +93,25 @@ bool is_untyped(const ExprNode* node) {
     return false;
 }
 
+/// Type arguments in force: generic parameter name -> concrete type.
+using Bindings = std::unordered_map<SymbolID, TypeId>;
+
+/// A function body to lower for one set of type arguments (generic function, or method of a generic type).
+struct Instantiation {
+    const FunctionDeclNode* m_decl{nullptr};
+    const ClassDeclNode* m_owner{nullptr};
+    Bindings m_bindings;
+    TypeId m_self{NO_TYPE};      ///< the instantiated owner type of a method (`Box<i32>`)
+    std::string m_name;
+};
+
+/// The class behind a value type, with its type arguments bound to the class's own parameter names.
+struct ClassView {
+    const ClassDeclNode* m_decl{nullptr};
+    Bindings m_bindings;
+    std::vector<TypeId> m_args;
+};
+
 class Lowerer {
     // 1. Member variables
     const TypeCheckerPass2& m_checker;
@@ -103,6 +122,21 @@ class Lowerer {
     bool m_isolated{false};   ///< lowering a parameter default: the caller's locals are not visible
     std::unordered_map<LocalId, TypeId> m_retypes;   ///< literal-initialized locals of the current function and the type their uses demand
     std::unordered_set<LocalId> m_defaulted;         ///< locals of the current attempt whose type came from an untyped literal
+    Bindings m_subst;                                ///< type arguments of the function being lowered
+    std::vector<Instantiation> m_queue;              ///< instantiations requested so far; lowered after the non-generic functions
+    std::unordered_map<const FunctionDeclNode*, const ClassDeclNode*> m_method_owner;   ///< methods declared inside a class body -> that class
+
+    /// Swaps in other type arguments for the duration of a scope (the callee's signature, a class's field types).
+    class SubstScope {
+        Lowerer& m_lowerer;
+        Bindings m_saved;
+
+    public:
+        SubstScope(Lowerer& lowerer, Bindings bindings) : m_lowerer(lowerer), m_saved(std::exchange(lowerer.m_subst, std::move(bindings))) {}
+        SubstScope(const SubstScope&) = delete;
+        SubstScope& operator=(const SubstScope&) = delete;
+        ~SubstScope() { m_lowerer.m_subst = std::move(m_saved); }
+    };
 
 public:
     // 2. Constructors
@@ -112,13 +146,23 @@ public:
     // 3. Member functions
     void run() {
         for (const DeclNode* decl : m_pass0.active_declarations()) {
+            if (const auto* cls = dynamic_cast<const ClassDeclNode*>(decl)) {
+                for (const FunctionDeclNode* method : cls->m_methods) m_method_owner[method] = cls;
+            }
+        }
+        for (const DeclNode* decl : m_pass0.active_declarations()) {
             if (const auto* fn = dynamic_cast<const FunctionDeclNode*>(decl)) {
-                if (fn->m_has_body) lower_function(fn, fn->m_owner != INVALID_SYMBOL_ID ? m_pass0.find_class(fn->m_owner) : nullptr);
+                if (fn->m_has_body) add_function(fn, fn->m_owner != INVALID_SYMBOL_ID ? m_pass0.find_class(fn->m_owner) : nullptr);
             } else if (const auto* cls = dynamic_cast<const ClassDeclNode*>(decl)) {
                 for (const FunctionDeclNode* method : cls->m_methods) {
-                    if (method->m_has_body) lower_function(method, cls);
+                    if (method->m_has_body) add_function(method, cls);
                 }
             }
+        }
+        // Instantiations requested by the code above, and by the instantiations themselves, in request order.
+        for (size_t i = 0; i < m_queue.size(); ++i) {
+            const Instantiation instantiation = m_queue[i];   // copied: lowering may request more and move the queue
+            lower_function(instantiation.m_decl, instantiation.m_owner, &instantiation);
         }
     }
 
@@ -213,20 +257,174 @@ private:
         if (node->m_path.empty()) fail("empty type path", node->m_span);
         const SymbolID last = node->m_path.back();
         const std::string text = name_of(last);
-        if (!node->m_generic_args.empty()) fail("generic type '" + text + "' (generics instantiation is not implemented)", node->m_span);
-        if (node->m_path.size() == 1) {
+        if (node->m_path.size() == 1 && node->m_generic_args.empty()) {
+            if (const auto bound = m_subst.find(last); bound != m_subst.end()) return bound->second;   // a type argument in force
             if (const auto builtin = primitive(text)) return *builtin;
         }
         if (const ClassDeclNode* cls = m_pass0.find_class(last)) {
-            if (!cls->m_type_params.empty()) fail("generic type '" + text + "' (generics instantiation is not implemented)", node->m_span);
-            return named(last);
+            if (cls->m_type_params.empty()) {
+                if (!node->m_generic_args.empty()) fail("type '" + text + "' is not generic", node->m_span);
+                return named(last);
+            }
+            if (node->m_generic_args.size() != cls->m_type_params.size()) {
+                fail("generic type '" + text + "' takes " + std::to_string(cls->m_type_params.size()) + " type argument(s)", node->m_span);
+            }
+            std::vector<TypeId> args;
+            for (const GenericArg& arg : node->m_generic_args) {
+                if (arg.m_type == nullptr || arg.m_name != INVALID_SYMBOL_ID) fail("constant generic arguments of '" + text + "' (not lowerable yet)", node->m_span);
+                args.push_back(lower_type(arg.m_type));
+            }
+            return instance_of(cls, args);
         }
         if (const EnumDeclNode* en = m_pass0.find_enum(last)) {
-            if (!en->m_type_params.empty()) fail("generic type '" + text + "' (generics instantiation is not implemented)", node->m_span);
+            if (!en->m_type_params.empty() || !node->m_generic_args.empty()) fail("generic enum '" + text + "' (generic enums are not lowerable yet)", node->m_span);
             return named(last);
         }
         if (m_pass0.find_ruleset(last) != nullptr) fail("ruleset type '" + text + "' (ruleset views are not lowerable yet)", node->m_span);
         fail("cannot resolve type '" + text + "' (generic parameters and types of modules that are not loaded are not lowerable yet)", node->m_span);
+    }
+
+    // ---- generics ------------------------------------------------------------------------------
+
+    /// `Box<i32>`: records the instance (once) and returns its type.
+    [[nodiscard]] TypeId instance_of(const ClassDeclNode* cls, const std::vector<TypeId>& args) {
+        std::string text = name_of(cls->m_name) + "<";
+        for (size_t i = 0; i < args.size(); ++i) text += (i != 0 ? ", " : "") + m_module.m_types.text(args[i]);
+        text += ">";
+        const SymbolID name = StringInterner::get().intern(text);
+        if (m_module.find_instance(name) == nullptr) {
+            ClassInstance instance;
+            instance.m_name = name;
+            instance.m_decl = cls;
+            instance.m_args = args;
+            m_module.m_instances.push_back(std::move(instance));
+        }
+        return named(name);
+    }
+
+    [[nodiscard]] std::optional<ClassView> lookup_class(TypeId value_type) const {
+        const Type& type = ty(value_type);
+        if (type.m_kind != TypeKind::Named) return std::nullopt;
+        ClassView result;
+        if (const ClassInstance* instance = m_module.find_instance(type.m_name)) {
+            result.m_decl = instance->m_decl;
+            result.m_args = instance->m_args;
+            for (size_t i = 0; i < instance->m_decl->m_type_params.size() && i < instance->m_args.size(); ++i) {
+                result.m_bindings[instance->m_decl->m_type_params[i].m_name] = instance->m_args[i];
+            }
+            return result;
+        }
+        if (const ClassDeclNode* cls = m_pass0.find_class(type.m_name); cls != nullptr && cls->m_type_params.empty()) {
+            result.m_decl = cls;
+            return result;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] ClassView class_view(TypeId value_type, SourceSpan span) const {
+        if (const auto result = lookup_class(value_type)) return *result;
+        const Type& type = ty(value_type);
+        if (type.m_kind != TypeKind::Named) fail("member access on a value of type '" + m_module.m_types.text(value_type) + "'", span);
+        fail("'" + name_of(type.m_name) + "' is not a class or struct (enum members are not lowerable yet)", span);
+    }
+
+    /// The type a value of `id` finally refers to: optionals and views stripped.
+    [[nodiscard]] TypeId value_type(TypeId id) const {
+        while (true) {
+            const Type& type = ty(id);
+            if (type.m_kind != TypeKind::Optional && type.m_kind != TypeKind::Pointer && type.m_kind != TypeKind::Reference) return id;
+            id = type.m_inner;
+        }
+    }
+
+    /// True when `node` names a generic parameter that has no binding yet.
+    [[nodiscard]] static bool mentions_unbound(const TypeNode* node, const std::unordered_set<SymbolID>& generics, const Bindings& bindings) {
+        if (node == nullptr || generics.empty()) return false;
+        switch (node->m_kind) {
+            case TypeNodeKind::Path:
+                if (node->m_path.size() == 1 && node->m_generic_args.empty() && generics.contains(node->m_path[0])) return !bindings.contains(node->m_path[0]);
+                for (const GenericArg& arg : node->m_generic_args) {
+                    if (mentions_unbound(arg.m_type, generics, bindings)) return true;
+                }
+                return false;
+            case TypeNodeKind::Pointer:
+            case TypeNodeKind::Reference:
+            case TypeNodeKind::Optional: return mentions_unbound(node->m_inner, generics, bindings);
+            case TypeNodeKind::Function:
+                for (const TypeNode* param : node->m_param_types) {
+                    if (mentions_unbound(param, generics, bindings)) return true;
+                }
+                return mentions_unbound(node->m_inner, generics, bindings);
+            case TypeNodeKind::Never: return false;
+        }
+        return false;
+    }
+
+    /// Binds generic parameters by matching a parameter's written type against the type of its argument.
+    void infer(const TypeNode* pattern, TypeId actual, Bindings& bound, const std::unordered_set<SymbolID>& generics) const {
+        if (pattern == nullptr) return;
+        const Type& type = ty(actual);   // nothing below interns, so the reference stays valid
+        switch (pattern->m_kind) {
+            case TypeNodeKind::Path:
+                if (pattern->m_path.size() == 1 && pattern->m_generic_args.empty() && generics.contains(pattern->m_path[0])) {
+                    bound.try_emplace(pattern->m_path[0], actual);
+                } else if (!pattern->m_generic_args.empty() && type.m_kind == TypeKind::Named) {
+                    const ClassInstance* instance = m_module.find_instance(type.m_name);
+                    if (instance == nullptr || instance->m_decl->m_name != pattern->m_path.back() ||
+                        instance->m_args.size() != pattern->m_generic_args.size()) {
+                        return;
+                    }
+                    for (size_t i = 0; i < instance->m_args.size(); ++i) infer(pattern->m_generic_args[i].m_type, instance->m_args[i], bound, generics);
+                }
+                return;
+            case TypeNodeKind::Pointer:
+            case TypeNodeKind::Reference:
+                if (type.m_kind == TypeKind::Pointer || type.m_kind == TypeKind::Reference) infer(pattern->m_inner, type.m_inner, bound, generics);
+                return;
+            case TypeNodeKind::Optional: infer(pattern->m_inner, type.m_kind == TypeKind::Optional ? type.m_inner : actual, bound, generics); return;
+            case TypeNodeKind::Function:
+                if (type.m_kind != TypeKind::Function || type.m_params.size() != pattern->m_param_types.size()) return;
+                for (size_t i = 0; i < type.m_params.size(); ++i) infer(pattern->m_param_types[i], type.m_params[i], bound, generics);
+                infer(pattern->m_inner, type.m_inner, bound, generics);
+                return;
+            case TypeNodeKind::Never: return;
+        }
+    }
+
+    /// The class a method belongs to: the one written in `fn Owner::name`, else the one whose body declares it.
+    [[nodiscard]] const ClassDeclNode* owner_of(const FunctionDeclNode* fn) const {
+        if (fn->m_owner != INVALID_SYMBOL_ID) return m_pass0.find_class(fn->m_owner);
+        const auto declared = m_method_owner.find(fn);
+        return declared != m_method_owner.end() ? declared->second : nullptr;
+    }
+
+    /// A call binds to a declaration (a class-body `fn get(...);` or an interface entry); instantiating needs the body.
+    [[nodiscard]] const FunctionDeclNode* find_definition(const FunctionDeclNode* declaration) const {
+        if (declaration->m_has_body) return declaration;
+        const ClassDeclNode* declared_owner = owner_of(declaration);
+        const SymbolID owner_name = declared_owner != nullptr ? declared_owner->m_name : declaration->m_owner;
+        for (const DeclNode* decl : m_pass0.active_declarations()) {
+            const auto* fn = dynamic_cast<const FunctionDeclNode*>(decl);
+            if (fn != nullptr && fn->m_has_body && fn->m_name == declaration->m_name && fn->m_params.size() == declaration->m_params.size() &&
+                fn->m_owner == owner_name) {
+                return fn;
+            }
+        }
+        return nullptr;
+    }
+
+    void request_instance(const FunctionDeclNode* decl, const ClassDeclNode* owner, Bindings bindings, TypeId self, std::string name, SourceSpan span) {
+        for (const Instantiation& known : m_queue) {
+            if (known.m_decl == decl && known.m_name == name) return;
+        }
+        if (m_queue.size() >= 1024) fail("more than 1024 instantiations (recursive generic instantiation?)", span);
+        Instantiation instantiation;
+        instantiation.m_decl = decl;
+        instantiation.m_owner = owner;
+        instantiation.m_bindings = std::move(bindings);
+        instantiation.m_self = self;
+        instantiation.m_name = std::move(name);
+        m_queue.push_back(std::move(instantiation));
     }
 
     // ---- locals --------------------------------------------------------------------------------
@@ -378,26 +576,68 @@ private:
 
     // ---- functions -----------------------------------------------------------------------------
 
-    void lower_function(const FunctionDeclNode* decl, const ClassDeclNode* owner) {
+    /// A non-generic function is lowered now; a generic one is kept as a template and lowered per instantiation.
+    void add_function(const FunctionDeclNode* decl, const ClassDeclNode* owner) {
+        const bool generic = !decl->m_type_params.empty() || (owner != nullptr && !owner->m_type_params.empty());
+        if (generic) add_template(decl, owner);
+        else lower_function(decl, owner, nullptr);
+    }
+
+    void add_template(const FunctionDeclNode* decl, const ClassDeclNode* owner) {
+        const SymbolID owner_name = decl->m_owner != INVALID_SYMBOL_ID ? decl->m_owner : (owner != nullptr ? owner->m_name : INVALID_SYMBOL_ID);
+        std::string name;
+        if (owner_name != INVALID_SYMBOL_ID) {
+            name = name_of(owner_name);
+            if (owner != nullptr && !owner->m_type_params.empty()) {
+                name += "<";
+                if (!decl->m_owner_args.empty()) {
+                    for (size_t i = 0; i < decl->m_owner_args.size(); ++i) {
+                        const TypeNode* arg = decl->m_owner_args[i].m_type;
+                        name += (i != 0 ? ", " : "") + (arg != nullptr && !arg->m_path.empty() ? name_of(arg->m_path.back()) : std::string("?"));
+                    }
+                } else {
+                    for (size_t i = 0; i < owner->m_type_params.size(); ++i) name += (i != 0 ? ", " : "") + name_of(owner->m_type_params[i].m_name);
+                }
+                name += ">";
+            }
+            name += "::";
+        }
+        name += name_of(decl->m_name);
+        if (!decl->m_type_params.empty()) {
+            name += "<";
+            for (size_t i = 0; i < decl->m_type_params.size(); ++i) name += (i != 0 ? ", " : "") + name_of(decl->m_type_params[i].m_name);
+            name += ">";
+        }
+        Function fn;
+        fn.m_name = std::move(name);
+        fn.m_decl = decl;
+        fn.m_is_template = true;
+        fn.m_reason_span = decl->m_span;
+        m_module.m_functions.push_back(std::move(fn));
+    }
+
+    void lower_function(const FunctionDeclNode* decl, const ClassDeclNode* owner, const Instantiation* instantiation) {
         Function fn;
         const SymbolID owner_name = decl->m_owner != INVALID_SYMBOL_ID ? decl->m_owner : (owner != nullptr ? owner->m_name : INVALID_SYMBOL_ID);
-        fn.m_name = (owner_name != INVALID_SYMBOL_ID ? name_of(owner_name) + "::" : std::string()) + name_of(decl->m_name);
+        fn.m_name = instantiation != nullptr ? instantiation->m_name
+                                             : (owner_name != INVALID_SYMBOL_ID ? name_of(owner_name) + "::" : std::string()) + name_of(decl->m_name);
         fn.m_decl = decl;
         fn.m_reason_span = decl->m_span;
         m_module.m_functions.push_back(std::move(fn));
         m_fn = &m_module.m_functions.back();
-        m_isolated = false;
         m_retypes.clear();
 
         // One attempt per literal-initialized local that turns out to need another type; bounded by the number of locals.
         for (size_t attempt = 0;; ++attempt) {
             m_scopes.clear();
             m_defaulted.clear();
+            m_isolated = false;
+            m_subst = instantiation != nullptr ? instantiation->m_bindings : Bindings{};
             m_fn->m_locals.clear();
             m_fn->m_body.clear();
             m_fn->m_param_count = 0;
             try {
-                lower_body(decl, owner, owner_name);
+                lower_body(decl, owner, owner_name, instantiation);
                 m_fn->m_lowered = true;
                 break;
             } catch (const RetypeLocal& retype) {
@@ -418,18 +658,25 @@ private:
             m_fn->m_param_count = 0;
         }
         m_scopes.clear();
+        m_subst.clear();
+        m_isolated = false;
         m_fn = nullptr;
     }
 
-    void lower_body(const FunctionDeclNode* decl, const ClassDeclNode* owner, SymbolID owner_name) {
+    void lower_body(const FunctionDeclNode* decl, const ClassDeclNode* owner, SymbolID owner_name, const Instantiation* instantiation) {
         if (decl->m_is_async) fail("async functions (state machine lowering is not implemented)", decl->m_span);
-        if (!decl->m_type_params.empty()) fail("generic function (generics instantiation is not implemented)", decl->m_span);
-        if (owner != nullptr && !owner->m_type_params.empty()) fail("method of a generic type (generics instantiation is not implemented)", decl->m_span);
+        if (instantiation == nullptr) {
+            if (!decl->m_type_params.empty()) fail("generic function lowered without type arguments", decl->m_span);
+            if (owner != nullptr && !owner->m_type_params.empty()) fail("method of a generic type lowered without type arguments", decl->m_span);
+        }
         m_fn->m_return = lower_type(decl->m_return_type);
         push_scope();
         if (decl->m_receiver.m_kind != ReceiverKind::None) {
-            if (owner_name == INVALID_SYMBOL_ID) fail("method without an owner type", decl->m_span);
-            const TypeId self_type = named(owner_name);
+            TypeId self_type = instantiation != nullptr ? instantiation->m_self : NO_TYPE;
+            if (self_type == NO_TYPE) {
+                if (owner_name == INVALID_SYMBOL_ID) fail("method without an owner type", decl->m_span);
+                self_type = named(owner_name);
+            }
             switch (decl->m_receiver.m_kind) {
                 case ReceiverKind::ByValue: declare(decl->m_receiver.m_self_name, self_type, true, true); break;
                 case ReceiverKind::ByConstRef:
@@ -775,27 +1022,24 @@ private:
         return out;
     }
 
-    [[nodiscard]] const ClassDeclNode* class_of(TypeId value_type, SourceSpan span) {
-        const Type& type = ty(value_type);
-        if (type.m_kind != TypeKind::Named) fail("member access on a value of type '" + m_module.m_types.text(value_type) + "'", span);
-        const ClassDeclNode* cls = m_pass0.find_class(type.m_name);
-        if (cls == nullptr) fail("'" + name_of(type.m_name) + "' is not a class or struct (enum members are not lowerable yet)", span);
-        if (!cls->m_type_params.empty()) fail("generic type '" + name_of(type.m_name) + "' (generics instantiation is not implemented)", span);
-        return cls;
+    /// The type of a field of the class behind `cls`, written in terms of the class's own type parameters.
+    [[nodiscard]] TypeId field_type(const ClassView& cls, const ParameterDecl& field) {
+        SubstScope scope(*this, cls.m_bindings);
+        return lower_type(field.m_type);
     }
 
     [[nodiscard]] ExprPtr lower_member(const MemberExpr* member) {
         ExprPtr object = to_value(lower_expr(member->m_object, NO_TYPE));
-        const ClassDeclNode* cls = class_of(object->m_type, member->m_span);
-        for (size_t i = 0; i < cls->m_fields.size(); ++i) {
-            if (cls->m_fields[i].m_name != member->m_member) continue;
-            ExprPtr out = node(ExprKind::Field, lower_type(cls->m_fields[i].m_type), member->m_span);
+        const ClassView cls = class_view(object->m_type, member->m_span);
+        for (size_t i = 0; i < cls.m_decl->m_fields.size(); ++i) {
+            if (cls.m_decl->m_fields[i].m_name != member->m_member) continue;
+            ExprPtr out = node(ExprKind::Field, field_type(cls, cls.m_decl->m_fields[i]), member->m_span);
             out->m_index = i;
             out->m_name = member->m_member;
             out->m_operands.push_back(std::move(object));
             return out;
         }
-        fail("'" + name_of(cls->m_name) + "' has no field '" + name_of(member->m_member) + "' (methods are only lowerable when called)", member->m_span);
+        fail("'" + name_of(cls.m_decl->m_name) + "' has no field '" + name_of(member->m_member) + "' (methods are only lowerable when called)", member->m_span);
     }
 
     [[nodiscard]] ExprPtr lower_index(const IndexExpr* index) {
@@ -820,69 +1064,174 @@ private:
     [[nodiscard]] ExprPtr lower_call(const CallExpr* call) {
         const ResolvedCall* resolved = m_checker.find_resolved_call(call);
         if (resolved == nullptr) fail("call that is not bound to a function (function values, built-ins and calls into unseen modules are not lowerable yet)", call->m_span);
-        const FunctionDeclNode* callee = resolved->m_callee;
-        if (!callee->m_type_params.empty()) fail("call of generic function '" + resolved->m_display + "' (generics instantiation is not implemented)", call->m_span);
-        if (callee->m_owner != INVALID_SYMBOL_ID) {
-            if (const ClassDeclNode* owner = m_pass0.find_class(callee->m_owner); owner != nullptr && !owner->m_type_params.empty()) {
-                fail("call of a method of generic type '" + name_of(owner->m_name) + "' (generics instantiation is not implemented)", call->m_span);
-            }
-        }
+        const FunctionDeclNode* declaration = resolved->m_callee;
+        const ReceiverKind kind = declaration->m_receiver.m_kind;
 
-        ExprPtr out = node(ExprKind::Call, lower_type(callee->m_return_type), call->m_span);
-        out->m_callee = callee;
-        out->m_text = resolved->m_display;
-        out->m_name = callee->m_name;
-
+        // The receiver is lowered first: its type also tells which instance of a generic owner is meant.
+        ExprPtr receiver;
         if (resolved->m_receiver != nullptr) {
-            const ReceiverKind kind = callee->m_receiver.m_kind;
             if (kind == ReceiverKind::None) fail("method call of '" + resolved->m_display + "', which has no receiver", call->m_span);
-            ExprPtr object = lower_expr(resolved->m_receiver, NO_TYPE);
-            if (ty(object->m_type).m_kind == TypeKind::Optional) {
-                const TypeId inner = ty(object->m_type).m_inner;
-                object = wrap_one(ExprKind::Unwrap, inner, std::move(object));
+            receiver = lower_expr(resolved->m_receiver, NO_TYPE);
+            if (ty(receiver->m_type).m_kind == TypeKind::Optional) {
+                const TypeId inner = ty(receiver->m_type).m_inner;
+                receiver = wrap_one(ExprKind::Unwrap, inner, std::move(receiver));
             }
-            if (kind == ReceiverKind::ByValue) {
-                out->m_operands.push_back(to_value(std::move(object)));
-            } else {
-                if (const TypeKind object_kind = ty(object->m_type).m_kind; object_kind != TypeKind::Pointer && object_kind != TypeKind::Reference) {
-                    const TypeId ref_type = view(TypeKind::Reference, false, object->m_type);
-                    object = wrap_one(ExprKind::AddrOf, ref_type, std::move(object));
-                }
-                const TypeId inner = ty(object->m_type).m_inner;
-                const TypeId target_view = view(TypeKind::Reference, kind == ReceiverKind::ByConstRef, inner);
-                out->m_operands.push_back(coerce(std::move(object), target_view, call->m_span));
-            }
-        } else if (callee->m_receiver.m_kind != ReceiverKind::None) {
+        } else if (kind != ReceiverKind::None) {
             fail("call of method '" + resolved->m_display + "' without a receiver", call->m_span);
         }
 
-        for (size_t i = 0; i < resolved->m_slots.size(); ++i) {
-            const ParameterDecl& param = callee->m_params[i];
-            const TypeId param_type = lower_type(param.m_type);
-            const ResolvedArgument& slot = resolved->m_slots[i];
-            const bool saved_isolated = m_isolated;
-            m_isolated = slot.m_is_default;   // a default is written in the callee's world: no locals of the caller
-            ExprPtr value = lower_expr(slot.m_value, param_type);
-            m_isolated = saved_isolated;
-            out->m_operands.push_back(coerce(std::move(value), param_type, slot.m_value != nullptr ? slot.m_value->m_span : call->m_span));
+        const ClassDeclNode* owner = owner_of(declaration);
+        std::optional<ClassView> receiver_class;
+        if (receiver != nullptr && (owner == nullptr || !owner->m_type_params.empty())) {
+            receiver_class = lookup_class(value_type(receiver->m_type));
+            if (owner == nullptr && receiver_class.has_value()) owner = receiver_class->m_decl;
+        }
+        const bool generic_owner = owner != nullptr && !owner->m_type_params.empty();
+        const bool generic_fn = !declaration->m_type_params.empty();
+
+        // Generic callees are instantiated from their definition (its spelling of the type parameters is the one its body uses).
+        const FunctionDeclNode* callee = declaration;
+        if (generic_owner || generic_fn) {
+            callee = find_definition(declaration);
+            if (callee == nullptr) fail("definition of generic '" + resolved->m_display + "' is not visible in this module (cross-module instantiation is not implemented)", call->m_span);
+        }
+
+        // Type arguments the callee's signature may mention; bound from the receiver, written arguments and the call's arguments.
+        Bindings bindings;
+        std::unordered_set<SymbolID> generics;
+        std::vector<SymbolID> owner_params;   // the owner's parameters as the callee spells them, in order
+        if (generic_owner) {
+            if (!callee->m_owner_args.empty()) {
+                for (const GenericArg& arg : callee->m_owner_args) {
+                    if (arg.m_type == nullptr || arg.m_type->m_kind != TypeNodeKind::Path || arg.m_type->m_path.size() != 1 || !arg.m_type->m_generic_args.empty()) {
+                        fail("method of a generic type whose owner arguments are not plain type parameters", call->m_span);
+                    }
+                    owner_params.push_back(arg.m_type->m_path[0]);
+                }
+            } else {
+                for (const GenericParam& param : owner->m_type_params) owner_params.push_back(param.m_name);
+            }
+            if (owner_params.size() != owner->m_type_params.size()) fail("owner arguments of '" + resolved->m_display + "' do not match the type's parameters", call->m_span);
+            for (const SymbolID name : owner_params) generics.insert(name);
+            const auto* path = dynamic_cast<const PathExpr*>(call->m_callee);
+            if (receiver_class.has_value() && receiver_class->m_decl == owner && receiver_class->m_args.size() == owner_params.size()) {
+                for (size_t i = 0; i < owner_params.size(); ++i) bindings[owner_params[i]] = receiver_class->m_args[i];
+            } else if (path != nullptr && !path->m_generic_args.empty()) {
+                if (path->m_generic_args.size() != owner_params.size()) fail("wrong number of type arguments for '" + name_of(owner->m_name) + "'", call->m_span);
+                for (size_t i = 0; i < owner_params.size(); ++i) {
+                    const GenericArg& arg = path->m_generic_args[i];
+                    if (arg.m_type == nullptr || arg.m_name != INVALID_SYMBOL_ID) fail("constant generic arguments (not lowerable yet)", call->m_span);
+                    bindings[owner_params[i]] = lower_type(arg.m_type);
+                }
+            }
+        }
+        for (const GenericParam& param : callee->m_type_params) generics.insert(param.m_name);
+
+        // Arguments: typed ones first (they bind the type arguments), then literals and defaults (which adapt to them).
+        const size_t count = resolved->m_slots.size();
+        std::vector<ExprPtr> values(count);
+        for (int pass = 0; pass < 2; ++pass) {
+            for (size_t i = 0; i < count; ++i) {
+                const ResolvedArgument& slot = resolved->m_slots[i];
+                if ((slot.m_is_default || is_untyped(slot.m_value)) != (pass == 1)) continue;
+                const TypeNode* param_node = callee->m_params[i].m_type;
+                const bool unbound = mentions_unbound(param_node, generics, bindings);
+                TypeId expected = NO_TYPE;
+                if (!unbound) {
+                    SubstScope scope(*this, bindings);
+                    expected = lower_type(param_node);
+                }
+                const bool saved_isolated = m_isolated;
+                m_isolated = slot.m_is_default;   // a default is written in the callee's world: no locals of the caller
+                if (slot.m_is_default) {
+                    SubstScope scope(*this, bindings);
+                    values[i] = lower_expr(slot.m_value, expected);
+                } else {
+                    values[i] = lower_expr(slot.m_value, expected);
+                }
+                m_isolated = saved_isolated;
+                if (unbound) infer(param_node, values[i]->m_type, bindings, generics);
+            }
+        }
+        for (const SymbolID name : generics) {
+            if (!bindings.contains(name)) fail("cannot infer the type argument '" + name_of(name) + "' of '" + resolved->m_display + "'", call->m_span);
+        }
+
+        // The signature under the type arguments.
+        TypeId return_type = NO_TYPE;
+        std::vector<TypeId> param_types(count, NO_TYPE);
+        {
+            SubstScope scope(*this, bindings);
+            return_type = lower_type(callee->m_return_type);
+            for (size_t i = 0; i < count; ++i) param_types[i] = lower_type(callee->m_params[i].m_type);
+        }
+
+        // A generic callee is lowered once per set of type arguments: name the instance and queue it.
+        std::string display = resolved->m_display;
+        if (generic_owner || generic_fn) {
+            TypeId self_type = NO_TYPE;
+            display.clear();
+            if (owner != nullptr) {
+                if (generic_owner) {
+                    std::vector<TypeId> owner_args;
+                    for (const SymbolID name : owner_params) owner_args.push_back(bindings.at(name));
+                    self_type = instance_of(owner, owner_args);
+                    display = m_module.m_types.text(self_type);
+                } else {
+                    display = name_of(owner->m_name);
+                }
+                display += "::";
+            }
+            display += name_of(callee->m_name);
+            if (generic_fn) {
+                display += "<";
+                for (size_t i = 0; i < callee->m_type_params.size(); ++i) {
+                    display += (i != 0 ? ", " : "") + m_module.m_types.text(bindings.at(callee->m_type_params[i].m_name));
+                }
+                display += ">";
+            }
+            request_instance(callee, owner, bindings, self_type, display, call->m_span);
+        }
+
+        ExprPtr out = node(ExprKind::Call, return_type, call->m_span);
+        out->m_callee = callee;
+        out->m_text = display;
+        out->m_name = callee->m_name;
+
+        if (receiver != nullptr) {
+            if (kind == ReceiverKind::ByValue) {
+                out->m_operands.push_back(to_value(std::move(receiver)));
+            } else {
+                if (const TypeKind object_kind = ty(receiver->m_type).m_kind; object_kind != TypeKind::Pointer && object_kind != TypeKind::Reference) {
+                    const TypeId ref_type = view(TypeKind::Reference, false, receiver->m_type);
+                    receiver = wrap_one(ExprKind::AddrOf, ref_type, std::move(receiver));
+                }
+                const TypeId inner = ty(receiver->m_type).m_inner;
+                const TypeId target_view = view(TypeKind::Reference, kind == ReceiverKind::ByConstRef, inner);
+                out->m_operands.push_back(coerce(std::move(receiver), target_view, call->m_span));
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            const SourceSpan span = resolved->m_slots[i].m_value != nullptr ? resolved->m_slots[i].m_value->m_span : call->m_span;
+            out->m_operands.push_back(coerce(std::move(values[i]), param_types[i], span));
         }
         return out;
     }
 
     [[nodiscard]] ExprPtr lower_struct_literal(const StructLiteralExpr* literal) {
         const TypeId type = lower_type(literal->m_type);
-        const ClassDeclNode* cls = class_of(type, literal->m_span);
+        const ClassView cls = class_view(type, literal->m_span);
         ExprPtr out = node(ExprKind::StructLit, type, literal->m_span);
-        for (const ParameterDecl& field : cls->m_fields) {
-            const TypeId field_type = lower_type(field.m_type);
+        for (const ParameterDecl& field : cls.m_decl->m_fields) {
+            const TypeId declared = field_type(cls, field);
             const FieldInit* init = nullptr;
             for (const FieldInit& candidate : literal->m_fields) {
                 if (candidate.m_name == field.m_name) init = &candidate;
             }
             if (init != nullptr) {
-                out->m_operands.push_back(coerce(lower_expr(init->m_value, field_type), field_type, init->m_span));
-            } else if (ty(field_type).m_kind == TypeKind::Optional) {
-                out->m_operands.push_back(node(ExprKind::NullLit, field_type, literal->m_span));   // an omitted optional field starts as null
+                out->m_operands.push_back(coerce(lower_expr(init->m_value, declared), declared, init->m_span));
+            } else if (ty(declared).m_kind == TypeKind::Optional) {
+                out->m_operands.push_back(node(ExprKind::NullLit, declared, literal->m_span));   // an omitted optional field starts as null
             } else {
                 fail("missing initializer for field '" + name_of(field.m_name) + "'", literal->m_span);
             }

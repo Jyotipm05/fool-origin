@@ -1,0 +1,80 @@
+// HIR: generics are monomorphized. A generic function or class is lowered once per set of type arguments that a
+// call or a type mentions, starting from the non-generic functions; the generic declaration stays as a template.
+// Expected output: generics.expected
+
+module tests::hir::generics;
+
+fn identity<T>(x: T) -> T {
+    return x;
+}
+
+fn larger<T>(a: T, b: T) -> T {
+    if (a > b) {
+        return a;
+    }
+    return b;
+}
+
+class Box<T> {
+    item: T;
+
+    fn get(this const& self) -> T;
+    fn put(this &self, item: T);
+    fn make(item: T) -> Box<T>;
+}
+
+fn Box<T>::get(this const& self) -> T {
+    return self.item;
+}
+
+fn Box<T>::put(this &self, item: T) {
+    self.item = item;
+}
+
+fn Box<T>::make(item: T) -> Box<T> {
+    return Box<T> { item: item };
+}
+
+class Pair<A, B> {
+    first: A;
+    second: B;
+
+    fn swap(this const& self) -> Pair<B, A>;
+}
+
+fn Pair<A, B>::swap(this const& self) -> Pair<B, A> {
+    return Pair<B, A> { first: self.second, second: self.first };
+}
+
+class Link<T> {
+    value: T;
+    next: Link<T>?;
+}
+
+fn head<T>(link: &Link<T>) -> T {
+    return link.value;
+}
+
+fn nested<T>(x: T) -> Box<Box<T>> {
+    return Box<Box<T>>::make(Box<T>::make(x));
+}
+
+fn user(flag: bool, wide: i64, ratio: f32) -> i32 {
+    var a = identity(3);                    // identity<i32>
+    var b = identity(wide);                 // identity<i64>
+    var c = identity(4);                    // identity<i32> again: one instance
+    var m = larger(1, 2);                   // the literals take the default type
+    var n = larger(wide, 3);                // the literal adapts to i64
+    var r = larger(ratio, 2);               // ... and to f32
+    var boxed = Box<i32> { item: 4 };
+    boxed.put(5);
+    var value = boxed.get();
+    var wide_box = Box<i64>::make(6);       // explicit type arguments
+    var guessed = Box::make(7);             // inferred from the argument: Box<i32>
+    var pair = Pair<i32, f32> { first: 1, second: 2.5 };
+    var swapped = pair.swap();             // Pair<f32, i32>
+    var deep = nested(flag);
+    var node = Link<i32> { value: 9 };
+    var first = head(&node);
+    return a + c + m + value + first;
+}

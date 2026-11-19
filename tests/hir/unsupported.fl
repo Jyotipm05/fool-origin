@@ -12,6 +12,15 @@ class Box<T> {
     item: T;
 }
 
+enum Maybe<T> {
+    Some(T),
+    Nothing,
+}
+
+fn takes_maybe(m: Maybe<i32>) {
+    return;
+}
+
 fn identity<T>(x: T) -> T {
     return x;
 }

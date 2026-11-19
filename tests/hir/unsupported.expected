@@ -1,16 +1,24 @@
-fn identity: not lowerable yet: generic function (generics instantiation is not implemented) (line 15)
+fn takes_maybe: not lowerable yet: generic enum 'Maybe' (generic enums are not lowerable yet) (line 20)
 
-fn lambda_user: not lowerable yet: lambdas (closure conversion is not implemented) (line 20)
+fn identity<T>: generic template
 
-fn for_loop: not lowerable yet: 'for' loops (the iteration protocol is not defined yet) (line 24)
+fn lambda_user: not lowerable yet: lambdas (closure conversion is not implemented) (line 29)
 
-fn enum_variant: not lowerable yet: qualified paths such as enum variants (not lowerable yet) (line 30)
+fn for_loop: not lowerable yet: 'for' loops (the iteration protocol is not defined yet) (line 33)
 
-fn unseen_type: not lowerable yet: cannot resolve type 'StringView' (generic parameters and types of modules that are not loaded are not lowerable yet) (line 33)
+fn enum_variant: not lowerable yet: qualified paths such as enum variants (not lowerable yet) (line 39)
+
+fn unseen_type: not lowerable yet: cannot resolve type 'StringView' (generic parameters and types of modules that are not loaded are not lowerable yet) (line 42)
 
 fn fine() -> i32 {
   return 7:i32;
 }
 
-fn calls_generic: not lowerable yet: call of generic function 'identity' (generics instantiation is not implemented) (line 42)
-// 1 of 7 function(s) lowered
+fn calls_generic() -> i32 {
+  return (call identity<i32> 3:i32);
+}
+
+fn identity<i32>(x: i32) -> i32 {
+  return x#0;
+}
+// 3 of 8 function(s) lowered, 1 generic template(s) instantiated on use

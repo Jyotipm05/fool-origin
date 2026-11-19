@@ -83,8 +83,11 @@ public:
             if (i != 0) m_out += "\n";
             print_function(m_module.m_functions[i]);
         }
-        m_out += "// " + std::to_string(m_module.lowered_count()) + " of " + std::to_string(m_module.m_functions.size()) +
-                 " function(s) lowered\n";
+        const size_t templates = m_module.template_count();
+        m_out += "// " + std::to_string(m_module.lowered_count()) + " of " + std::to_string(m_module.m_functions.size() - templates) +
+                 " function(s) lowered";
+        if (templates != 0) m_out += ", " + std::to_string(templates) + " generic template(s) instantiated on use";
+        m_out += "\n";
         return std::move(m_out);
     }
 
@@ -189,6 +192,10 @@ private:
 
     void print_function(const Function& fn) {
         m_fn = &fn;
+        if (fn.m_is_template) {
+            m_out += "fn " + fn.m_name + ": generic template\n";
+            return;
+        }
         if (!fn.m_lowered) {
             m_out += "fn " + fn.m_name + ": not lowerable yet: " + fn.m_reason + " (line " +
                      std::to_string(fn.m_reason_span.m_start.m_line) + ")\n";
@@ -245,6 +252,19 @@ size_t Module::lowered_count() const {
     size_t count = 0;
     for (const Function& fn : m_functions) count += fn.m_lowered ? 1 : 0;
     return count;
+}
+
+size_t Module::template_count() const {
+    size_t count = 0;
+    for (const Function& fn : m_functions) count += fn.m_is_template ? 1 : 0;
+    return count;
+}
+
+const ClassInstance* Module::find_instance(SymbolID name) const {
+    for (const ClassInstance& instance : m_instances) {
+        if (instance.m_name == name) return &instance;
+    }
+    return nullptr;
 }
 
 std::string dump(const Module& module) { return Printer(module).run(); }

@@ -14,9 +14,11 @@
  *   - member access goes through explicit dereferences and field indices
  *   - compile-time `@if` statements are gone: only the selected branch remains
  *
- * Only the monomorphic subset is lowered. A function that uses something HIR v1 cannot express (generics,
- * lambdas, `for`, enum payloads, reflection, ...) is kept as "not lowerable yet" with the reason and the line,
- * so a later stage knows exactly what is missing instead of silently skipping it.
+ * Generics are monomorphized: a generic function or class is lowered once per set of type arguments that a call or
+ * a type mentions (`identity<i32>`, `Box<i64>::make`), starting from the non-generic functions; the generic
+ * declaration itself is kept as a template entry. A function that uses something HIR cannot express (lambdas,
+ * `for`, enum payloads, reflection, generic enums, ...) is kept as "not lowerable yet" with the reason and the
+ * line, so a later stage knows exactly what is missing instead of silently skipping it.
  */
 
 module;
@@ -140,9 +142,18 @@ struct Local {
     bool m_is_param{false};   ///< the receiver and the parameters come first, in order
 };
 
+/// A generic class instantiated with type arguments (`Box<i32>`): a Named type whose name is the instance's spelling.
+struct ClassInstance {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};          ///< `Box<i32>`
+    const ClassDeclNode* m_decl{nullptr};
+    std::vector<TypeId> m_args;                  ///< one per type parameter of m_decl, in order
+};
+
 struct Function {
     // 1. Member variables
-    std::string m_name;                          ///< `f` or `Type::method`
+    std::string m_name;                          ///< `f`, `Type::method`, or an instance such as `identity<i32>` / `Box<i32>::get`
+    bool m_is_template{false};                   ///< a generic function (or method of a generic type): lowered once per instantiation, not itself
     const FunctionDeclNode* m_decl{nullptr};
     std::vector<Local> m_locals;                 ///< parameters first (receiver, then parameters), then every `let`
     size_t m_param_count{0};
@@ -156,10 +167,13 @@ struct Function {
 struct Module {
     // 1. Member variables
     TypeTable m_types;
-    std::vector<Function> m_functions;
+    std::vector<Function> m_functions;         ///< the non-generic functions in declaration order, then the instantiations in the order they were requested
+    std::vector<ClassInstance> m_instances;
 
     // 2. Member functions
     [[nodiscard]] size_t lowered_count() const;
+    [[nodiscard]] size_t template_count() const;
+    [[nodiscard]] const ClassInstance* find_instance(SymbolID name) const;
 };
 
 /// Lowers every function with a body that the checker accepted. Call only after `checker.check_module()` succeeded.
