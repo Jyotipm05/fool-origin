@@ -1,0 +1,50 @@
+// HIR: enum values are EnumLit expressions. `Mode::Read` and `Shape::Circle(2.0)` have the enum's type, payload values
+// convert to the declared payload types, and `==` / `!=` work on enums whose variants carry no payload.
+// Expected output: enums.expected
+
+module tests::hir::enums;
+
+enum Mode {
+    Read,
+    Write,
+    Append,
+}
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+struct Job {
+    mode: Mode;
+    priority: i32;
+}
+
+fn flags(mode: Mode) -> i32 {
+    var result = 0;
+    if (mode == Mode::Write) {
+        result = 577;
+    }
+    if (mode != Mode::Read && mode != Mode::Write) {
+        result = 1089;
+    }
+    return result;
+}
+
+fn pick(write: bool) -> Mode {
+    if (write) {
+        return Mode::Write;
+    }
+    return Mode::Read;
+}
+
+fn shapes(side: f32) {
+    var round = Shape::Circle(2);            // the literal adapts to f64
+    var box: Shape = Shape::Rect(side, 2.5); // f32 widens to f64
+    var nothing = Shape::Empty;
+}
+
+fn job() -> Job {
+    return Job { mode: Mode::Append, priority: 3 };
+}

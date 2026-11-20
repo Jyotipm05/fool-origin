@@ -79,6 +79,19 @@ public:
 
     // 3. Member functions
     std::string run() {
+        for (const EnumInfo& info : m_module.m_enums) {
+            m_out += "enum " + name_of(info.m_name) + " {";
+            for (size_t i = 0; i < info.m_variants.size(); ++i) {
+                m_out += (i != 0 ? ", " : " ") + name_of(info.m_variants[i].m_name);
+                const std::vector<TypeId>& payload = info.m_variants[i].m_payload;
+                if (payload.empty()) continue;
+                m_out += "(";
+                for (size_t j = 0; j < payload.size(); ++j) m_out += (j != 0 ? ", " : "") + m_module.m_types.text(payload[j]);
+                m_out += ")";
+            }
+            m_out += " }\n";
+        }
+        if (!m_module.m_enums.empty()) m_out += "\n";
         for (size_t i = 0; i < m_module.m_functions.size(); ++i) {
             if (i != 0) m_out += "\n";
             print_function(m_module.m_functions[i]);
@@ -127,6 +140,11 @@ private:
             case ExprKind::Wrap: return "(wrap:" + type(e.m_type) + " " + operand(0) + ")";
             case ExprKind::Call: {
                 std::string text = "(call " + e.m_text;
+                for (size_t i = 0; i < e.m_operands.size(); ++i) text += " " + operand(i);
+                return text + ")";
+            }
+            case ExprKind::EnumLit: {
+                std::string text = "(variant " + e.m_text;
                 for (size_t i = 0; i < e.m_operands.size(); ++i) text += " " + operand(i);
                 return text + ")";
             }
@@ -272,6 +290,13 @@ size_t Module::template_count() const {
 const ClassInstance* Module::find_instance(SymbolID name) const {
     for (const ClassInstance& instance : m_instances) {
         if (instance.m_name == name) return &instance;
+    }
+    return nullptr;
+}
+
+const EnumInfo* Module::find_enum(SymbolID name) const {
+    for (const EnumInfo& info : m_enums) {
+        if (info.m_name == name) return &info;
     }
     return nullptr;
 }

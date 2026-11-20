@@ -29,8 +29,12 @@ fn lambda_user() {
     f = (x: i32) -> i32 { return x; };
 }
 
-fn enum_variant() {
-    var s = Shape::Empty;
+fn compare_payload_enums(a: Shape, b: Shape) -> bool {
+    return a == b;
+}
+
+fn payload_variant_without_values() {
+    var s = Shape::Circle;
 }
 
 fn unseen_type(text: StringView) {

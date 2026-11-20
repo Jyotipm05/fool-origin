@@ -1,0 +1,31 @@
+enum Mode { Read, Write, Append }
+enum Shape { Circle(f64), Rect(f64, f64), Empty }
+
+fn flags(mode: Mode) -> i32 {
+  let result#1: i32 = 0:i32;
+  if (== mode#0 (variant Mode::Write)) {
+    (= result#1 577:i32);
+  }
+  if (&& (!= mode#0 (variant Mode::Read)) (!= mode#0 (variant Mode::Write))) {
+    (= result#1 1089:i32);
+  }
+  return result#1;
+}
+
+fn pick(write: bool) -> Mode {
+  if write#0 {
+    return (variant Mode::Write);
+  }
+  return (variant Mode::Read);
+}
+
+fn shapes(side: f32) {
+  let round#1: Shape = (variant Shape::Circle 2.0:f64);
+  let box#2: Shape = (variant Shape::Rect (convert:f64 side#0) 2.5:f64);
+  let nothing#3: Shape = (variant Shape::Empty);
+}
+
+fn job() -> Job {
+  return (new Job (variant Mode::Append) 3:i32);
+}
+// 4 of 4 function(s) lowered

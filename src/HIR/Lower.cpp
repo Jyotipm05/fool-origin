@@ -125,6 +125,7 @@ class Lowerer {
     Bindings m_subst;                                ///< type arguments of the function being lowered
     std::vector<Instantiation> m_queue;              ///< instantiations requested so far; lowered after the non-generic functions
     std::unordered_map<const FunctionDeclNode*, const ClassDeclNode*> m_method_owner;   ///< methods declared inside a class body -> that class
+    std::unordered_set<SymbolID> m_registering;      ///< enums whose payload types are being lowered right now
 
     /// Swaps in other type arguments for the duration of a scope (the callee's signature, a class's field types).
     class SubstScope {
@@ -277,11 +278,71 @@ private:
             return instance_of(cls, args);
         }
         if (const EnumDeclNode* en = m_pass0.find_enum(last)) {
-            if (!en->m_type_params.empty() || !node->m_generic_args.empty()) fail("generic enum '" + text + "' (generic enums are not lowerable yet)", node->m_span);
-            return named(last);
+            if (!node->m_generic_args.empty()) fail("generic enum '" + text + "' (generic enums are not lowerable yet)", node->m_span);
+            return enum_type(en, node->m_span);
         }
         if (m_pass0.find_ruleset(last) != nullptr) fail("ruleset type '" + text + "' (ruleset views are not lowerable yet)", node->m_span);
         fail("cannot resolve type '" + text + "' (generic parameters and types of modules that are not loaded are not lowerable yet)", node->m_span);
+    }
+
+    // ---- enums ---------------------------------------------------------------------------------
+
+    /// The Named type of a non-generic enum; the first use records it, with the types of every variant's payload.
+    [[nodiscard]] TypeId enum_type(const EnumDeclNode* en, SourceSpan span) {
+        if (!en->m_type_params.empty()) fail("generic enum '" + name_of(en->m_name) + "' (generic enums are not lowerable yet)", span);
+        const TypeId type = named(en->m_name);
+        if (m_module.find_enum(en->m_name) != nullptr || m_registering.count(en->m_name) != 0) return type;
+        m_registering.insert(en->m_name);   // a payload may mention the enum itself
+        EnumInfo info;
+        info.m_name = en->m_name;
+        info.m_decl = en;
+        try {
+            for (const EnumVariant& variant : en->m_variants) {
+                EnumVariantInfo entry;
+                entry.m_name = variant.m_name;
+                for (const TypeNode* payload : variant.m_payload) entry.m_payload.push_back(lower_type(payload));
+                info.m_variants.push_back(std::move(entry));
+            }
+        } catch (...) {
+            m_registering.erase(en->m_name);
+            throw;
+        }
+        m_registering.erase(en->m_name);
+        m_module.m_enums.push_back(std::move(info));
+        return type;
+    }
+
+    /// `Enum::Variant` when the path names one (and is not a function of the enum).
+    [[nodiscard]] const EnumDeclNode* variant_path(const PathExpr* path, size_t& index) const {
+        if (path->m_segments.size() != 2 || !path->m_generic_args.empty()) return nullptr;
+        const EnumDeclNode* en = m_pass0.find_enum(path->m_segments[0]);
+        if (en == nullptr) return nullptr;
+        for (size_t i = 0; i < en->m_variants.size(); ++i) {
+            if (en->m_variants[i].m_name == path->m_segments[1]) {
+                index = i;
+                return en;
+            }
+        }
+        return nullptr;
+    }
+
+    /// `Mode::Read` or `Shape::Circle(2.0)`: the payload arguments are converted to the variant's payload types.
+    [[nodiscard]] ExprPtr lower_enum_value(const EnumDeclNode* en, size_t index, const std::vector<CallArg>& args, SourceSpan span) {
+        const TypeId type = enum_type(en, span);
+        const EnumInfo* info = m_module.find_enum(en->m_name);
+        const EnumVariantInfo variant = info->m_variants[index];   // a copy: lowering the arguments may register more enums
+        const std::string full = name_of(en->m_name) + "::" + name_of(variant.m_name);
+        if (args.size() != variant.m_payload.size()) {
+            fail("variant '" + full + "' takes " + std::to_string(variant.m_payload.size()) + " payload value(s), not " + std::to_string(args.size()), span);
+        }
+        ExprPtr out = node(ExprKind::EnumLit, type, span);
+        out->m_index = index;
+        out->m_text = full;
+        for (size_t i = 0; i < args.size(); ++i) {
+            if (args[i].m_label != INVALID_SYMBOL_ID) fail("a labelled payload value of '" + full + "' (not lowerable yet)", args[i].m_span);
+            out->m_operands.push_back(coerce(lower_expr(args[i].m_expr, variant.m_payload[i]), variant.m_payload[i], args[i].m_span));
+        }
+        return out;
     }
 
     // ---- generics ------------------------------------------------------------------------------
@@ -905,7 +966,11 @@ private:
         if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(e)) return lower_struct_literal(literal);
         if (dynamic_cast<const LambdaExpr*>(e) != nullptr) fail("lambdas (closure conversion is not implemented)", e->m_span);
         if (dynamic_cast<const IntrinsicCallExpr*>(e) != nullptr) fail("compile-time intrinsics and reflection (not evaluated yet)", e->m_span);
-        if (dynamic_cast<const PathExpr*>(e) != nullptr) fail("qualified paths such as enum variants (not lowerable yet)", e->m_span);
+        if (const auto* path = dynamic_cast<const PathExpr*>(e)) {
+            size_t index = 0;
+            if (const EnumDeclNode* en = variant_path(path, index)) return lower_enum_value(en, index, {}, e->m_span);
+            fail("qualified paths other than enum variants (not lowerable yet)", e->m_span);
+        }
         fail("unsupported expression", e->m_span);
     }
 
@@ -1008,6 +1073,11 @@ private:
         }
         const bool equality = binary->m_op == TokenKind::EqualEqual || binary->m_op == TokenKind::ExclaimEqual;
         unify(lhs, rhs, equality, span);
+        const EnumInfo* enum_info = ty(lhs->m_type).m_kind == TypeKind::Named ? m_module.find_enum(ty(lhs->m_type).m_name) : nullptr;
+        if (const EnumInfo* info = enum_info) {
+            if (!equality) fail("ordering of enum values (not defined)", span);
+            if (!info->is_plain()) fail("comparing values of enum '" + name_of(info->m_name) + "', whose variants carry payloads (equality is not defined for them)", span);
+        }
         const TypeId type = comparison ? bool_type() : lhs->m_type;
         ExprPtr out = node(ExprKind::Binary, type, span);
         out->m_op = binary->m_op;
@@ -1084,6 +1154,10 @@ private:
     }
 
     [[nodiscard]] ExprPtr lower_call(const CallExpr* call) {
+        if (const auto* path = dynamic_cast<const PathExpr*>(call->m_callee)) {
+            size_t index = 0;
+            if (const EnumDeclNode* en = variant_path(path, index)) return lower_enum_value(en, index, call->m_args, call->m_span);
+        }
         const ResolvedCall* resolved = m_checker.find_resolved_call(call);
         if (resolved == nullptr) fail("call that is not bound to a function (function values, built-ins and calls into unseen modules are not lowerable yet)", call->m_span);
         const FunctionDeclNode* declaration = resolved->m_callee;

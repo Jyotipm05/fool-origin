@@ -13,12 +13,13 @@
  *   - every call lists its arguments in the callee's parameter order, defaults filled in, receiver first
  *   - member access goes through explicit dereferences and field indices
  *   - compile-time `@if` statements are gone: only the selected branch remains
+ *   - an enum value is an EnumLit (`Mode::Read`, `Shape::Circle(2.0)`); equality is only defined on enums without payloads
  *   - `for (init; condition; step)` is a Block holding the initializer and a For, so the loop variable has a scope of its own
  *
  * Generics are monomorphized: a generic function or class is lowered once per set of type arguments that a call or
  * a type mentions (`identity<i32>`, `Box<i64>::make`), starting from the non-generic functions; the generic
  * declaration itself is kept as a template entry. A function that uses something HIR cannot express (lambdas,
- * `for`, enum payloads, reflection, generic enums, ...) is kept as "not lowerable yet" with the reason and the
+ * async, reflection, generic enums, ...) is kept as "not lowerable yet" with the reason and the
  * line, so a later stage knows exactly what is missing instead of silently skipping it.
  */
 
@@ -94,7 +95,8 @@ enum class ExprKind : uint8_t {
     Deref,      ///< `*operands[0]`
     Unwrap,     ///< `T?` -> `T`; the checker proved the optional holds a value
     Wrap,       ///< `T` -> `T?`
-    StructLit   ///< operands in field declaration order
+    StructLit,  ///< operands in field declaration order
+    EnumLit     ///< a variant of an enum: m_type is the enum, m_index the variant, m_text `Enum::Variant`; operands are the payload in order
 };
 
 struct Expr {
@@ -153,6 +155,30 @@ struct ClassInstance {
     std::vector<TypeId> m_args;                  ///< one per type parameter of m_decl, in order
 };
 
+/// One variant of an enum and the types of its payload (empty for `Mode::Read`).
+struct EnumVariantInfo {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    std::vector<TypeId> m_payload;
+};
+
+/// A (non-generic) enum that some lowered code mentions: a Named type whose variants are listed in declaration order.
+struct EnumInfo {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    const EnumDeclNode* m_decl{nullptr};
+    std::vector<EnumVariantInfo> m_variants;
+
+    // 2. Member functions
+    /// True when no variant carries a payload: the values are plain tags and can be compared with `==` / `!=`.
+    [[nodiscard]] bool is_plain() const {
+        for (const EnumVariantInfo& variant : m_variants) {
+            if (!variant.m_payload.empty()) return false;
+        }
+        return true;
+    }
+};
+
 struct Function {
     // 1. Member variables
     std::string m_name;                          ///< `f`, `Type::method`, or an instance such as `identity<i32>` / `Box<i32>::get`
@@ -172,11 +198,13 @@ struct Module {
     TypeTable m_types;
     std::vector<Function> m_functions;         ///< the non-generic functions in declaration order, then the instantiations in the order they were requested
     std::vector<ClassInstance> m_instances;
+    std::vector<EnumInfo> m_enums;             ///< the enums that the lowered code mentions, in order of first use
 
     // 2. Member functions
     [[nodiscard]] size_t lowered_count() const;
     [[nodiscard]] size_t template_count() const;
     [[nodiscard]] const ClassInstance* find_instance(SymbolID name) const;
+    [[nodiscard]] const EnumInfo* find_enum(SymbolID name) const;
 };
 
 /// Lowers every function with a body that the checker accepted. Call only after `checker.check_module()` succeeded.

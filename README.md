@@ -550,7 +550,13 @@ an omitted condition means "until `break`":
 }
 ```
 
-What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, enum variants and other qualified paths, generic enums, constant generic arguments, async functions, reflection
+Enums that the lowered code mentions are listed first in the dump (`enum Shape { Circle(f64), Rect(f64, f64), Empty }`).
+A value is a `(variant Enum::Variant payload…)` expression whose payload values are converted to the declared payload
+types, and `==` / `!=` are defined for enums whose variants carry no payload (ordering and comparing payload enums are
+reported as not lowerable, since the language does not define them). The language has no `match` yet, so a payload can
+be built but not read back.
+
+What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, generic enums, qualified paths other than enum variants, constant generic arguments, async functions, reflection
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
 loaded (instantiation needs the definition's body, so a generic defined in another module is not instantiated yet), and
 calls on a struct literal receiver (the checker does not bind them). The last line of the dump counts how many
