@@ -743,22 +743,59 @@ StmtNode* Parser::parse_for() {
     advance(); // 'for'
     auto* stmt = m_arena.create<ForStmt>();
 
-    Token var = consume(TokenKind::Identifier, "Expected loop variable name after 'for'");
-    if (var.m_kind == TokenKind::Invalid) {
-        synchronize_statement();
+    if (!check(TokenKind::OpenParen)) {
+        error_here("Expected '(' after 'for', found '" + describe(current()) +
+                   "': write 'for (var i: T = start; condition; step) { ... }' (there is no 'for i in a..b' form)");
+        while (!is_at_end() && !check(TokenKind::OpenBrace) && !check(TokenKind::Semicolon) && !check(TokenKind::CloseBrace)) advance();
+        if (check(TokenKind::OpenBrace)) (void)parse_block(); // skip the body so it does not cascade into more errors
         return nullptr;
     }
-    stmt->m_variable = var.m_symbol_id;
-    consume(TokenKind::KwIn, "Expected 'in' after loop variable");
+    advance(); // '('
 
-    bool saved = m_no_struct_literal;
-    m_no_struct_literal = true;
-    stmt->m_iterable = parse_expression();
-    m_no_struct_literal = saved;
-    if (stmt->m_iterable == nullptr) {
-        synchronize_statement();
-        return nullptr;
+    // init: a declaration (which consumes its own ';'), an expression statement, or nothing
+    if (check(TokenKind::Semicolon)) {
+        advance();
+    } else if (check(TokenKind::KwVar) || check(TokenKind::KwConst) || check(TokenKind::KwConstx)) {
+        SourceLocation init_start = current().m_span.m_start;
+        VarDeclNode* var = parse_var_decl();
+        if (var == nullptr) return nullptr;
+        var->m_span = span_from(init_start);
+        auto* decl_stmt = m_arena.create<DeclStmt>(var);
+        decl_stmt->m_span = var->m_span;
+        stmt->m_init = decl_stmt;
+    } else {
+        SourceLocation init_start = current().m_span.m_start;
+        ExprNode* init = parse_expression();
+        if (init == nullptr) {
+            synchronize_statement();
+            return nullptr;
+        }
+        consume(TokenKind::Semicolon, "Expected ';' after the loop initializer");
+        auto* init_stmt = m_arena.create<ExprStmt>(init);
+        init_stmt->m_span = span_from(init_start);
+        stmt->m_init = init_stmt;
     }
+
+    // condition
+    if (!check(TokenKind::Semicolon)) {
+        stmt->m_condition = parse_expression();
+        if (stmt->m_condition == nullptr) {
+            synchronize_statement();
+            return nullptr;
+        }
+    }
+    consume(TokenKind::Semicolon, "Expected ';' after the loop condition");
+
+    // step
+    if (!check(TokenKind::CloseParen)) {
+        stmt->m_step = parse_expression();
+        if (stmt->m_step == nullptr) {
+            synchronize_statement();
+            return nullptr;
+        }
+    }
+    consume(TokenKind::CloseParen, "Expected ')' after the loop step");
+
     stmt->m_body = parse_block();
     if (stmt->m_body == nullptr) return nullptr;
     stmt->m_span = span_from(start);

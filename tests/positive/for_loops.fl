@@ -1,0 +1,91 @@
+// `for (init; condition; step)`: the type, the starting value and the step are all written by the programmer, so
+// integers, floats and counting down need no special cases.
+
+module tests::for_loops;
+
+fn up(n: usize) -> usize {
+    var total: usize = 0;
+    for (var i: usize = 0; i < n; i = i + 1) {
+        total = total + i;
+    }
+    return total;
+}
+
+fn down(n: usize) -> usize {
+    var total: usize = 0;
+    for (var i: usize = n; i > 0; i = i - 1) {
+        total = total + i;
+    }
+    return total;
+}
+
+fn every_third(limit: i32) -> i32 {
+    var total = 0;
+    for (var i = 0; i < limit; i = i + 3) {
+        total = total + i;
+    }
+    return total;
+}
+
+fn fractions() -> f32 {
+    var total: f32 = 0.0;
+    for (var x: f32 = 0.0; x < 1.0; x = x + 0.25) {
+        total = total + x;
+    }
+    return total;
+}
+
+fn with_control_flow(n: i32) -> i32 {
+    var total = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        if (i == 2) {
+            continue;
+        }
+        if (i == 7) {
+            break;
+        }
+        total = total + i;
+    }
+    return total;
+}
+
+fn declared_before(n: i32) -> i32 {
+    var i = 0;
+    for (; i < n; i = i + 2) {
+    }
+    return i;
+}
+
+fn forever() -> i32 {
+    var count = 0;
+    for (;;) {
+        count = count + 1;
+        if (count == 3) {
+            break;
+        }
+    }
+    return count;
+}
+
+fn nested(n: i32) -> i32 {
+    var total = 0;
+    for (var row = 0; row < n; row = row + 1) {
+        for (var column = 0; column < row; column = column + 1) {
+            total = total + 1;
+        }
+    }
+    return total;
+}
+
+// The loop variable belongs to the loop: the same name can start the next loop and be declared again afterwards.
+fn reuse_names(n: i32) -> i32 {
+    var total = 0;
+    for (var i = 0; i < n; i = i + 1) {
+        total = total + i;
+    }
+    for (var i = 0; i < n; i = i + 1) {
+        total = total + i;
+    }
+    var i = 100;
+    return total + i;
+}

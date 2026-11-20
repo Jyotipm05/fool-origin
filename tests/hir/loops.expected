@@ -1,0 +1,86 @@
+fn sum(data: const* f32, length: usize) -> f32 {
+  let total#2: f32 = 0.0:f32;
+  {
+    let i#3: usize = 0:usize;
+    for (< i#3 length#1) step (= i#3 (+ i#3 1:usize)) {
+      (= total#2 (+ total#2 (index data#0 i#3)));
+    }
+  }
+  return total#2;
+}
+
+fn inferred() -> i32 {
+  let count#0: i32 = 0:i32;
+  {
+    let i#1: i32 = 1:i32;
+    for (< i#1 10:i32) step (= i#1 (+ i#1 3:i32)) {
+      (= count#0 (+ count#0 i#1));
+    }
+  }
+  return count#0;
+}
+
+fn countdown(n: usize) -> usize {
+  let total#1: usize = 0:usize;
+  {
+    let i#2: usize = n#0;
+    for (> i#2 0:usize) step (= i#2 (- i#2 1:usize)) {
+      (= total#1 (+ total#1 i#2));
+    }
+  }
+  return total#1;
+}
+
+fn fractions() -> f32 {
+  let total#0: f32 = 0.0:f32;
+  {
+    let x#1: f32 = 0.0:f32;
+    for (< x#1 1.0:f32) step (= x#1 (+ x#1 0.25:f32)) {
+      (= total#0 (+ total#0 x#1));
+    }
+  }
+  return total#0;
+}
+
+fn nested(n: i64) -> i64 {
+  let total#1: i64 = 0:i64;
+  {
+    let row#2: i64 = 0:i64;
+    for (< row#2 n#0) step (= row#2 (+ row#2 1:i64)) {
+      {
+        let column#3: i64 = row#2;
+        for (< column#3 n#0) step (= column#3 (+ column#3 1:i64)) {
+          if (== column#3 3:i64) {
+            continue;
+          }
+          if (> total#1 1000:i64) {
+            break;
+          }
+          (= total#1 (+ total#1 (* row#2 column#3)));
+        }
+      }
+    }
+  }
+  return total#1;
+}
+
+fn parts_are_optional(limit: i32) -> i32 {
+  let i#1: i32 = 0:i32;
+  for (< i#1 limit#0) {
+    (= i#1 (+ i#1 2:i32));
+  }
+  for {
+    break;
+  }
+  return i#1;
+}
+
+fn copy(dst: *u8, src: const* u8, bytes: usize) {
+  {
+    let i#3: usize = 0:usize;
+    for (< i#3 bytes#2) step (= i#3 (+ i#3 1:usize)) {
+      (= (index dst#0 i#3) (index src#1 i#3));
+    }
+  }
+}
+// 7 of 7 function(s) lowered

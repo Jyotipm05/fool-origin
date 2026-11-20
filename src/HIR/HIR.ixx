@@ -13,6 +13,7 @@
  *   - every call lists its arguments in the callee's parameter order, defaults filled in, receiver first
  *   - member access goes through explicit dereferences and field indices
  *   - compile-time `@if` statements are gone: only the selected branch remains
+ *   - `for (init; condition; step)` is a Block holding the initializer and a For, so the loop variable has a scope of its own
  *
  * Generics are monomorphized: a generic function or class is lowered once per set of type arguments that a call or
  * a type mentions (`identity<i32>`, `Box<i64>::make`), starting from the non-generic functions; the generic
@@ -119,6 +120,7 @@ enum class StmtKind : uint8_t {
     Return,     ///< m_expr, or none for `return;`
     If,         ///< condition m_expr, m_body, m_else (an `else if` chain is one nested If in m_else)
     While,      ///< condition m_expr, m_body
+    For,        ///< condition m_expr (none: loop until `break`), m_step runs after every iteration, also after `continue`; m_body
     Break,
     Continue,
     Block       ///< m_body, a scope of its own
@@ -130,6 +132,7 @@ struct Stmt {
     SourceSpan m_span;
     LocalId m_local{NO_LOCAL};
     std::unique_ptr<Expr> m_expr;
+    std::unique_ptr<Expr> m_step;     ///< For: evaluated after the body and after `continue`; may be absent
     std::vector<Stmt> m_body;
     std::vector<Stmt> m_else;
 };

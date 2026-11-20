@@ -12,10 +12,12 @@
   - [2d. Optional Types (`T?`)](#2d-optional-types-t)
   - [2f. Lambdas, Function Types and Explicit Captures](#2f-lambdas-function-types-and-explicit-captures)
   - [2g. Serialization and Reflection (`$serialize`)](#2g-serialization-and-reflection-serialize)
+  - [2h. Loops](#2h-loops)
   - [3. Explicit Receivers](#3-explicit-receivers)
   - [4. Middle & Trailing Parameter Defaults](#4-middle--trailing-parameter-defaults)
   - [5. Nominal Capability Rulesets & Blueprints](#5-nominal-capability-rulesets--blueprints)
   - [6. Directive-Only Attribute System (@)](#6-directive-only-attribute-system-)
+- [Documentation (`docs/`)](#documentation)
 - [Repository Structure](#repository-structure)
 - [The `foolc` Compiler Architecture](#the-foolc-compiler-architecture)
 - [Standard Library (`stdlib/`)](#standard-library-stdlib)
@@ -85,7 +87,7 @@ Fool eliminates the verbose `mut` keyword in favor of clean, predictable mutabil
 
 ### 2b. Scopes & Shadowing
 
-Fool follows C++ block scoping. A `{ ... }` block, an `if`/`while` body, a `for` loop (loop variable plus body) and every
+Fool follows C++ block scoping. A `{ ... }` block, an `if`/`while` body, a `for` loop (the variable its initializer declares, plus the body) and every
 branch of a compile-time `@if` open a new scope. A name declared in a nested scope **shadows** the same name from an
 enclosing scope until the end of its block; afterwards the outer name is visible again and was never modified:
 
@@ -257,6 +259,31 @@ fn save(p: Player) -> StringView {
 
 ---
 
+### 2h. Loops
+
+`while` takes a condition (parentheses are optional): `while (i < n) { ... }`. `for` is written the way C++ writes it, so
+the loop variable's type, its starting value and the step are all visible at the loop and nothing is implied about
+size or direction:
+
+```fool
+for (var i: usize = 0; i < n; i = i + 1) { ... }       // up, one at a time
+for (var i: usize = n; i > 0; i = i - 1) { ... }       // down; stops before wrapping below zero
+for (var i = 0; i < limit; i = i + 3) { ... }          // every third; `var i = 0` is an i32 like anywhere else
+for (var x: f32 = 0.0; x < 1.0; x = x + 0.25) { ... }  // a non-integer step is just as explicit
+for (; i < limit; ) { ... }                            // each of the three parts may be left out
+for (;;) { ... }                                       // until `break` or `return`
+```
+
+- The header is `(init; condition; step)`. `init` is a declaration or an expression statement, `condition` must be
+  a `bool` (or an optional, like any condition) and `step` is an expression that runs after every iteration, **also
+  after `continue`**.
+- The variable declared by `init` belongs to the loop: it is visible in the condition, the step and the body, and
+  not after the loop, so the next loop can reuse the name. It is a normal variable (a `const` one cannot be stepped).
+- There is no `for x in a..b` form and no iteration protocol yet; writing `for i in ...` is a parse error that shows the
+  right spelling. `in` stays a reserved word for the day iteration over collections is designed.
+
+---
+
 ### 3. Explicit Receivers
 
 Methods in Fool do not rely on implicit, hidden `this` pointers. The receiver is explicitly declared as the first parameter:
@@ -362,6 +389,15 @@ Dependent modules cleanly supply configuration values down to dependencies witho
 
 ---
 
+## Documentation
+
+Two documents in [`docs/`](docs/) go deeper than this README:
+
+- [`docs/language.md`](docs/language.md): the Fool language itself, from lexical rules to modules, types, statements and directives.
+- [`docs/source-structure.md`](docs/source-structure.md): how the `foolc` source tree is organised, which module does what, and how a file travels through the passes.
+
+---
+
 ## Repository Structure
 
 ```
@@ -393,6 +429,7 @@ fool-origin/
 │   ├── HIR/                   # HIR v1: typed, resolved, desugared function bodies lowered from the checked AST
 │   ├── Module/                # `.flbmi` cache: SHA-256, binary parse-tree codec, on-disk cache manager
 │   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
+├── docs/                      # language.md (the language) and source-structure.md (the compiler's source tree)
 ├── stdlib/                    # Standard Library (52 files across 7 subsystems)
 │   ├── core/                  # memory, span, atomic, rulesets
 │   ├── io/                    # file I/O, platform syscall bindings
@@ -500,8 +537,20 @@ fn Box<i32>::get(self: const& Box<i32>) -> i32 {
 }
 ```
 
-What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, `for`
-loops, enum variants and other qualified paths, generic enums, constant generic arguments, async functions, reflection
+`for (init; condition; step)` lowers to a Block holding the initializer and a `For` statement, so the loop variable has a
+scope of its own. The step is a field of the `For`, not appended to the body, because `continue` must still run it;
+an omitted condition means "until `break`":
+
+```text
+{
+  let i#3: usize = 0:usize;
+  for (< i#3 length#1) step (= i#3 (+ i#3 1:usize)) {
+    (= total#2 (+ total#2 (index data#0 i#3)));
+  }
+}
+```
+
+What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, enum variants and other qualified paths, generic enums, constant generic arguments, async functions, reflection
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
 loaded (instantiation needs the definition's body, so a generic defined in another module is not instantiated yet), and
 calls on a struct literal receiver (the checker does not bind them). The last line of the dump counts how many

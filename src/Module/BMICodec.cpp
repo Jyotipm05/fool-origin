@@ -251,7 +251,7 @@ private:
         } else if (auto* n = dynamic_cast<const WhileStmt*>(s)) {
             u8(StmtWhile); span(n->m_span); expr(n->m_condition); stmt(n->m_body);
         } else if (auto* n = dynamic_cast<const ForStmt*>(s)) {
-            u8(StmtFor); span(n->m_span); sym(n->m_variable); expr(n->m_iterable); stmt(n->m_body);
+            u8(StmtFor); span(n->m_span); stmt(n->m_init); expr(n->m_condition); expr(n->m_step); stmt(n->m_body);
         } else if (dynamic_cast<const BreakStmt*>(s) != nullptr) {
             u8(StmtBreak); span(s->m_span);
         } else if (dynamic_cast<const ContinueStmt*>(s) != nullptr) {
@@ -733,8 +733,9 @@ private:
         }
         case StmtFor: {
             auto* n = m_arena.create<ForStmt>();
-            n->m_variable = sym();
-            n->m_iterable = expr();
+            n->m_init = stmt();
+            n->m_condition = expr();
+            n->m_step = expr();
             n->m_body = block();
             result = n;
             break;

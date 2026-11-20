@@ -12,7 +12,7 @@ fn StringView::equals(this const& self, other: StringView) -> bool {
     if self.length != other.length {
         return false;
     }
-    for i in 0..self.length {
+    for (var i: usize = 0; i < self.length; i = i + 1) {
         if self.bytes[i] != other.bytes[i] {
             return false;
         }
@@ -24,7 +24,7 @@ fn StringView::starts_with(this const& self, prefix: StringView) -> bool {
     if prefix.length > self.length {
         return false;
     }
-    for i in 0..prefix.length {
+    for (var i: usize = 0; i < prefix.length; i = i + 1) {
         if self.bytes[i] != prefix.bytes[i] {
             return false;
         }

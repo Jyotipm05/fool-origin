@@ -748,8 +748,8 @@ private:
             s.m_expr = as_condition(lower_expr(while_stmt->m_condition, bool_type()), while_stmt->m_condition->m_span);
             lower_scoped(while_stmt->m_body, s.m_body);
             out.push_back(std::move(s));
-        } else if (dynamic_cast<const ForStmt*>(stmt) != nullptr) {
-            fail("'for' loops (the iteration protocol is not defined yet)", stmt->m_span);
+        } else if (const auto* for_stmt = dynamic_cast<const ForStmt*>(stmt)) {
+            lower_for(for_stmt, out);
         } else if (dynamic_cast<const BreakStmt*>(stmt) != nullptr) {
             out.push_back(make_stmt(StmtKind::Break, stmt->m_span));
         } else if (dynamic_cast<const ContinueStmt*>(stmt) != nullptr) {
@@ -790,6 +790,28 @@ private:
     void require_storable(TypeId type, SourceSpan span) {
         const TypeKind kind = ty(type).m_kind;
         if (kind == TypeKind::Void || kind == TypeKind::Never) fail("a variable cannot hold a value of type '" + m_module.m_types.text(type) + "'", span);
+    }
+
+    /// `for (init; condition; step) { body }`: the initializer and the loop share a scope, so they become a Block
+    /// (when there is an initializer). The step is its own field, not appended to the body, because `continue` must
+    /// still run it.
+    void lower_for(const ForStmt* for_stmt, std::vector<Stmt>& out) {
+        push_scope();
+        Stmt loop = make_stmt(StmtKind::For, for_stmt->m_span);
+        Stmt scope = make_stmt(StmtKind::Block, for_stmt->m_span);
+        if (for_stmt->m_init != nullptr) lower_statement(for_stmt->m_init, scope.m_body);
+        if (for_stmt->m_condition != nullptr) {
+            loop.m_expr = as_condition(lower_expr(for_stmt->m_condition, bool_type()), for_stmt->m_condition->m_span);
+        }
+        lower_scoped(for_stmt->m_body, loop.m_body);
+        if (for_stmt->m_step != nullptr) loop.m_step = lower_expr(for_stmt->m_step, NO_TYPE);
+        pop_scope();
+        if (for_stmt->m_init == nullptr) {
+            out.push_back(std::move(loop));
+        } else {
+            scope.m_body.push_back(std::move(loop));
+            out.push_back(std::move(scope));
+        }
     }
 
     Stmt lower_if(const IfStmt* if_stmt) {

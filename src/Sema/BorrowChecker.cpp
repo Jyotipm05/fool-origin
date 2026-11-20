@@ -379,17 +379,12 @@ void BorrowCheckerPass::walk_block(const BlockStmt* block) {
     pop_scope();
 }
 
-void BorrowCheckerPass::walk_loop(const ExprNode* condition, const ExprNode* iterable, SymbolID variable,
-                                  const BlockStmt* body) {
-    walk_expr(iterable);
+void BorrowCheckerPass::walk_loop(const ExprNode* condition, const ExprNode* step, const BlockStmt* body) {
     const size_t start = m_pos;
-    push_scope(); // the loop variable lives in a scope around the body
-    if (variable != INVALID_SYMBOL_ID) {
-        SymbolID loop_variable = declare(variable);
-        if (m_mode == Mode::Collect) m_decl_pos[loop_variable] = start + 1;
-    }
+    push_scope();
     walk_expr(condition);
     walk_block(body);
+    walk_expr(step);
     pop_scope();
     if (m_mode == Mode::Collect) {
         // A name declared before the loop and used inside it is live for the whole loop.
@@ -416,9 +411,12 @@ void BorrowCheckerPass::walk_statement(const StmtNode* stmt) {
         walk_block(if_stmt->m_then);
         walk_statement(if_stmt->m_else);
     } else if (const auto* while_stmt = dynamic_cast<const WhileStmt*>(stmt)) {
-        walk_loop(while_stmt->m_condition, nullptr, INVALID_SYMBOL_ID, while_stmt->m_body);
+        walk_loop(while_stmt->m_condition, nullptr, while_stmt->m_body);
     } else if (const auto* for_stmt = dynamic_cast<const ForStmt*>(stmt)) {
-        walk_loop(nullptr, for_stmt->m_iterable, for_stmt->m_variable, for_stmt->m_body);
+        push_scope(); // the initializer's variable lives in a scope around the whole loop
+        walk_statement(for_stmt->m_init);
+        walk_loop(for_stmt->m_condition, for_stmt->m_step, for_stmt->m_body);
+        pop_scope();
     } else if (const auto* conditional = dynamic_cast<const ConditionalStmt*>(stmt)) {
         if (const ConditionalBranch* branch = select_branch(conditional)) {
             push_scope();

@@ -627,17 +627,24 @@ namespace fool {
             --m_loop_depth;
             unnarrow_to(mark);
         } else if (const auto *for_stmt = dynamic_cast<const ForStmt *>(stmt)) {
-            kill_assigned_in(for_stmt->m_body);
-            check_expression(for_stmt->m_iterable);
-            push_scope();
-            SymbolBinding var;
-            var.m_name = for_stmt->m_variable;
-            var.m_binding_kind = BindingKind::Immutable;
-            var.m_span = for_stmt->m_span;
-            declare(var);
+            kill_assigned_in(for_stmt->m_body); // later iterations see what the earlier ones assigned
+            kill_assigned_in(for_stmt->m_step);
+            kill_assigned_in(for_stmt->m_condition);
+            push_scope(); // the initializer's variable lives in a scope around the condition, the step and the body
+            check_statement(for_stmt->m_init);
+            std::vector<SymbolID> holds_value;
+            if (for_stmt->m_condition != nullptr) {
+                check_expression(for_stmt->m_condition);
+                check_condition(for_stmt->m_condition, "for");
+                collect_narrowing(for_stmt->m_condition, true, holds_value);
+            }
+            const size_t mark = m_narrow_log.size();
+            narrow(holds_value);
             ++m_loop_depth;
             check_block_scoped(for_stmt->m_body); // the body is a block inside the loop-variable scope, like C++
             --m_loop_depth;
+            unnarrow_to(mark);
+            if (for_stmt->m_step != nullptr) check_expression(for_stmt->m_step);
             pop_scope();
         } else if (dynamic_cast<const BreakStmt *>(stmt) != nullptr) {
             if (m_loop_depth == 0) m_diag.error(stmt->m_span, "'break' outside of a loop");

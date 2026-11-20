@@ -1,0 +1,69 @@
+// HIR: `for (init; condition; step)` keeps the programmer's type, start and step. The initializer and the loop share
+// a scope (a Block), the step is evaluated after the body and after `continue`. Expected output: loops.expected
+
+module tests::hir::loops;
+
+fn sum(data: const* f32, length: usize) -> f32 {
+    var total: f32 = 0.0;
+    for (var i: usize = 0; i < length; i = i + 1) {
+        total = total + data[i];
+    }
+    return total;
+}
+
+fn inferred() -> i32 {
+    var count = 0;
+    for (var i = 1; i < 10; i = i + 3) {      // i is i32; the step is 3
+        count = count + i;
+    }
+    return count;
+}
+
+fn countdown(n: usize) -> usize {
+    var total: usize = 0;
+    for (var i: usize = n; i > 0; i = i - 1) {   // down, one at a time; no wrap-around below zero
+        total = total + i;
+    }
+    return total;
+}
+
+fn fractions() -> f32 {
+    var total: f32 = 0.0;
+    for (var x: f32 = 0.0; x < 1.0; x = x + 0.25) {   // a non-integer step is just as explicit
+        total = total + x;
+    }
+    return total;
+}
+
+fn nested(n: i64) -> i64 {
+    var total: i64 = 0;
+    for (var row: i64 = 0; row < n; row = row + 1) {
+        for (var column: i64 = row; column < n; column = column + 1) {
+            if (column == 3) {
+                continue;                           // still runs `column = column + 1`
+            }
+            if (total > 1000) {
+                break;
+            }
+            total = total + row * column;
+        }
+    }
+    return total;
+}
+
+fn parts_are_optional(limit: i32) -> i32 {
+    var i = 0;
+    for (; i < limit; ) {                           // like a while loop
+        i = i + 2;
+    }
+    for (;;) {                                      // until break
+        break;
+    }
+    return i;
+}
+
+fn copy(dst: *u8, src: const* u8, bytes: usize) {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
+        dst[i] = src[i];
+    }
+}

@@ -154,7 +154,9 @@ void TypeCheckerPass2::kill_assigned_in(const StmtNode* stmt) {
         kill_assigned_in(while_stmt->m_condition);
         kill_assigned_in(while_stmt->m_body);
     } else if (const auto* for_stmt = dynamic_cast<const ForStmt*>(stmt)) {
-        kill_assigned_in(for_stmt->m_iterable);
+        kill_assigned_in(for_stmt->m_init);
+        kill_assigned_in(for_stmt->m_condition);
+        kill_assigned_in(for_stmt->m_step);
         kill_assigned_in(for_stmt->m_body);
     } else if (const auto* conditional = dynamic_cast<const ConditionalStmt*>(stmt)) {
         for (const ConditionalBranch& branch : conditional->m_branches) {

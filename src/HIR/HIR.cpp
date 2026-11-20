@@ -179,6 +179,15 @@ private:
                 indent(depth);
                 m_out += "}\n";
                 break;
+            case StmtKind::For:
+                m_out += "for";
+                if (s.m_expr) m_out += " " + expr_text(*s.m_expr);
+                if (s.m_step) m_out += " step " + expr_text(*s.m_step);
+                m_out += " {\n";
+                print_block(s.m_body, depth + 1);
+                indent(depth);
+                m_out += "}\n";
+                break;
             case StmtKind::Break: m_out += "break;\n"; break;
             case StmtKind::Continue: m_out += "continue;\n"; break;
             case StmtKind::Block:

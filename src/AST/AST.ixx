@@ -416,11 +416,14 @@ public:
     WhileStmt() = default;
 };
 
+/// `for (init; condition; step) { body }`, all three header parts optional. The type, the starting value and the
+/// step are written out by the programmer: `for (var i: usize = 0; i < n; i = i + 1)`.
 class ForStmt : public StmtNode {
 public:
     // 1. Member variables
-    SymbolID m_variable{INVALID_SYMBOL_ID};
-    ExprNode* m_iterable{nullptr};
+    StmtNode* m_init{nullptr};        ///< a declaration (`var i: usize = 0;`) or an expression statement; scoped to the loop
+    ExprNode* m_condition{nullptr};   ///< nullptr: loop until `break` / `return`
+    ExprNode* m_step{nullptr};        ///< runs after every iteration, also after `continue`
     BlockStmt* m_body{nullptr};
 
     // 2. Constructors

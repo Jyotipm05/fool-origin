@@ -29,12 +29,6 @@ fn lambda_user() {
     f = (x: i32) -> i32 { return x; };
 }
 
-fn for_loop() {
-    for step in 0..3 {
-        var skipped = step;
-    }
-}
-
 fn enum_variant() {
     var s = Shape::Empty;
 }

@@ -1,0 +1,11 @@
+// The loop is written `for (var i: T = start; condition; step)`; there is no `for i in a..b` form.
+
+module tests::negative::for_old_syntax;
+
+fn sum(n: usize) -> usize {
+    var total: usize = 0;
+    for i in 0..n { // expect-error: there is no 'for i in a..b' form
+        total = total + i;
+    }
+    return total;
+}

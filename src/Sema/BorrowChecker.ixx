@@ -109,7 +109,7 @@ private:
     void walk_call(const CallExpr* call);
     void walk_var_decl(const VarDeclNode* var);
     void walk_return(const ReturnStmt* ret);
-    void walk_loop(const ExprNode* condition, const ExprNode* iterable, SymbolID variable, const BlockStmt* body);
+    void walk_loop(const ExprNode* condition, const ExprNode* step, const BlockStmt* body);
     const ConditionalBranch* select_branch(const ConditionalStmt* stmt) const;
 
     // events

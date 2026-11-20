@@ -2,13 +2,13 @@ module std::core;
 #import std::core::sys_mem;
 
 fn RawMemory::copy(dest: *u8, src: const* u8, bytes: usize) {
-    for i in 0..bytes {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
         dest[i] = src[i];
     }
 }
 
 fn RawMemory::set(dest: *u8, value: u8, bytes: usize) {
-    for i in 0..bytes {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
         dest[i] = value;
     }
 }
