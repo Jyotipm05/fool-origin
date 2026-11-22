@@ -12,8 +12,8 @@ Contents: [1. Overview](#1-overview) · [2. Directory map](#2-directory-map) · 
 ## 1. Overview
 
 `foolc` is C++23, built from C++ modules (`.ixx` interface files, `.cpp` implementation units) with CMake + Ninja and
-clang. It is a front end: it reads Fool source, checks it, and lowers function bodies to a typed high-level IR
-(HIR). There is no mid-level IR and no code generator yet.
+clang. It is a front end: it reads Fool source, checks it, lowers function bodies to a typed high-level IR (HIR) and
+builds a control-flow graph (MIR) from that. There is no code generator yet.
 
 ```text
  .fo / .fl / .fex
@@ -28,6 +28,8 @@ clang. It is a front end: it reads Fool source, checks it, and lowers function b
  BorrowCheckerPass  (opt-in, --check-borrow)
         ▼
  hir::lower_module  typed, resolved, desugared bodies; generics monomorphized   (--dump-hir)
+        ▼
+ mir::lower         basic blocks, explicit evaluation order, places; mir::verify    (--dump-mir)
 ```
 
 ---
@@ -64,6 +66,10 @@ src/
 │   ├── HIR.ixx               module fool.hir: Type/TypeTable, Expr, Stmt, Function, Module, lower_module, dump
 │   ├── HIR.cpp               TypeTable, Module helpers, the `--dump-hir` printer
 │   └── Lower.cpp             the Lowerer: typing, conversions, calls, generics instantiation, statements
+├── MIR/
+│   ├── MIR.ixx               module fool.mir: Place, Operand, Rvalue, Statement, Terminator, Block, Function, Module
+│   ├── MIR.cpp               the `--dump-mir` printer, the verifier, `--mir-selftest`
+│   └── Build.cpp             the Builder: HIR -> blocks (control flow, evaluation order, places)
 ├── Module/                   module fool.bmi: the `.flbmi` cache
 │   ├── BMICache.ixx / .cpp   Sha256, BMICacheManager, key and file layout, BMI_FORMAT_VERSION
 │   ├── BMICodec.cpp          lossless binary encoding of the AST (one case per node type)
@@ -119,6 +125,12 @@ index, global or callee, make every conversion explicit, fill in default argumen
 Generics are monomorphized through a queue of instantiations. A function that uses something HIR cannot express yet is
 kept as "not lowerable yet" with the reason and line, never silently dropped. Details are in the README section "HIR v1".
 
+**MIR (`mir::lower`).** Reads only the HIR module. Each lowered function becomes a list of basic blocks: `if`, loops,
+`break`, `continue`, `return`, `&&` and `||` turn into blocks and jumps, every compound expression into statements that write
+temporaries (copying a read out first when a later operand calls something), every memory access into a place with
+projections. Blocks that nothing reaches (the code after a `return`) are removed. `mir::verify` then checks the graph;
+`--dump-mir` runs it on every dump and reports a failure as an internal error. Details are in the README section "MIR v1".
+
 ---
 
 ## 4. Modules
@@ -133,10 +145,12 @@ kept as "not lowerable yet" with the reason and line, never silently dropped. De
 | `fool.sema` | `Sema/SymbolTable.ixx` + the `.cpp` files | `SymbolTablePass0`, `ModuleGraphPass1`, `TypeCheckerPass2`, `ConstEvaluator`, `TargetConfig` |
 | `fool.borrow` | `Sema/BorrowChecker.ixx` | `BorrowCheckerPass` |
 | `fool.hir` | `HIR/` | `Type`, `TypeTable`, `Expr`, `Stmt`, `Function`, `Module`, `lower_module`, `dump` |
+| `fool.mir` | `MIR/` | `Place`, `Operand`, `Rvalue`, `Statement`, `Terminator`, `Block`, `Function`, `Module`, `lower`, `verify`, `dump` |
 | `fool.bmi` | `Module/` | `Sha256`, `BMICacheManager`, the codec |
 
 Dependency order, each importing only what is above it: `common` → `diagnostics` → `lexer` → `ast` → `parser`;
-`sema` uses `ast` and `parser`; `borrow` and `hir` use `sema`; `bmi` uses `parser` and `ast`; `main.cpp` uses all.
+`sema` uses `ast` and `parser`; `borrow` and `hir` use `sema`; `mir` uses `hir` (it never looks at the AST or the checker
+again); `bmi` uses `parser` and `ast`; `main.cpp` uses all.
 
 ---
 
@@ -173,6 +187,8 @@ A change that adds or alters syntax touches the same places in the same order:
    walker that switches over statement or expression kinds needs the new case: the type checker, `kill_assigned_in`
    in `TypeCheckerOptional.cpp`, the borrow checker.
 6. **HIR** (`HIR.ixx`, `Lower.cpp`, `HIR.cpp` printer): lower it, or make the function "not lowerable yet" with a reason.
+   A new HIR expression or statement kind also needs a case in the MIR builder (`MIR/Build.cpp`), and a new MIR
+   construct a case in the printer and the verifier (`MIR/MIR.cpp`).
 7. **Tests** (below) and the **README / `docs/`**. Editor grammars live in `editors/`.
 
 Example: the `for (init; condition; step)` loop touched `ForStmt` (AST), `parse_for`, `StmtFor` in the codec (version 3 → 4),
@@ -194,11 +210,12 @@ the checker's scope handling, `kill_assigned_in`, the borrow checker's `walk_loo
 | `tests/types/` | `--dump-types` golden files | `types` |
 | `tests/reflection/` | `--dump-reflection` golden files | `reflection` |
 | `tests/hir/` | `--dump-hir` golden files | `hir` |
+| `tests/mir/` | `--dump-mir` golden files; the verifier runs on each dump. Also `foolc_mir_selftest` and `foolc_mir_project` (every function of `stdlib/` + `examples/`) | `mir` |
 | `tests/project/` | multi-file module graphs (ok, cycle, unresolved, bad template, interface-only, ...) | `project` |
 | `tests/cache/` | the `.flbmi` cache cycle | `bmi` |
 
 Golden tests run through `tests/calls/run_golden.cmake`, which runs `foolc -q <flag> <file>` and compares the output with
-the `.expected` file. The `calls`, `types`, `reflection` and `hir` groups run a second time with `--bmi-roundtrip`
+the `.expected` file. The `calls`, `types`, `reflection`, `hir` and `mir` groups run a second time with `--bmi-roundtrip`
 (`*_roundtrip`, label `bmi`). To refresh a golden file after an intended change, regenerate it with the same command
 and review the diff. The whole `stdlib/` + `examples/` workspace is also checked in project mode, with and without the
 borrow checker and for several `--target`s.
@@ -223,5 +240,5 @@ ctest --test-dir build -j
 
 - `src/Codegen/` (`BackendInterface`, `LLVM/LLVMCodeGen`, `Native/FastEmitter`), `src/Module/ModuleGraph.ixx` and
   `src/Module/PatchOverlay.ixx` are empty placeholders for the planned back ends and are not part of the build.
-- MIR, optimization passes, linking, and everything after HIR lowering.
+- Optimization passes, SSA, linking, and everything after MIR (code generation).
 - A language server; the editor extensions are syntax highlighting only.

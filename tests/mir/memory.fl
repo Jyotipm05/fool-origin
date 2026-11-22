@@ -1,0 +1,85 @@
+// MIR: places and evaluation order. Pointers, fields, optionals, calls with side effects, enums and aggregates.
+// Expected output: memory.expected
+
+module tests::mir::memory;
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+class Counter {
+    count: i32;
+    last: Point?;
+
+    fn bump(this &self, by: i32) -> i32;
+    fn peek(this const& self) -> i32;
+}
+
+enum Mode {
+    Read,
+    Write,
+}
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn Counter::bump(this &self, by: i32) -> i32 {
+    self.count = self.count + by;
+    return self.count;
+}
+
+fn Counter::peek(this const& self) -> i32 {
+    return self.count;
+}
+
+fn swap_xy(p: *Point) {
+    var saved = p.x;
+    p.x = p.y;
+    p.y = saved;
+}
+
+fn fill(dst: *u8, value: u8, bytes: usize) {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
+        dst[i] = value;
+    }
+}
+
+fn make_point(x: i32, y: i32) -> Point {
+    return Point { x: x, y: y };
+}
+
+fn sum_points(a: Point, b: Point) -> i32 {
+    return a.x + b.x + a.y + b.y;
+}
+
+fn order(c: &Counter) -> i32 {
+    // The first operand is read before bump() runs, so it is copied out first.
+    return c.peek() + c.bump(5);
+}
+
+fn optionals(c: &Counter, p: Point?) -> i32 {
+    c.last = p;
+    c.last = null;
+    if (p) {
+        return p.x;
+    }
+    return 0;
+}
+
+fn tags(write: bool) -> Mode {
+    if (write) {
+        return Mode::Write;
+    }
+    return Mode::Read;
+}
+
+fn shape() -> Shape {
+    return Shape::Circle(2);
+}
+
+fn convert(small: u8, wide: i64) -> i64 {
+    return small + wide;
+}

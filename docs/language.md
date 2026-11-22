@@ -384,13 +384,15 @@ missed error is possible but a wrong one should not be.
 
 ## 10. What does not exist yet
 
-- **Code generation.** The compiler parses, checks and lowers to HIR; nothing executes yet.
-- **A mid-level IR, optimization, linking.**
+- **Code generation.** The compiler parses, checks, lowers to HIR and builds a control-flow graph (MIR); nothing executes yet.
+- **Optimization, linking.**
+- **A way to read an enum payload.** A variant can be built (`Shape::Circle(2.0)`) and plain enums compared with `==`,
+  but there is no `match` or pattern test yet.
 - **Ruleset conformance** (declaring and checking that a class satisfies a ruleset) and the runtime test behind
   `@dynamic_cast`.
 - **Iteration over collections** and any use of `in`; compound assignment and `++` / `--`.
 - **`deserialize`**, compile-time evaluation of reflection, serialization code.
 - **Generics:** constant generic arguments, generic enums, instantiation across modules, constraints enforced on
   arguments.
-- **HIR for** lambdas, enum payloads and variant paths, async functions and reflection intrinsics (those functions are
-  reported by `--dump-hir` as "not lowerable yet" with the reason).
+- **HIR for** lambdas, async functions, reflection intrinsics and generic enums (those functions are reported by
+  `--dump-hir` as "not lowerable yet" with the reason).

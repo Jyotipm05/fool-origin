@@ -38,6 +38,8 @@ add_executable(foolc
         src/Sema/BorrowChecker.cpp
         src/HIR/HIR.cpp
         src/HIR/Lower.cpp
+        src/MIR/MIR.cpp
+        src/MIR/Build.cpp
         src/Module/Sha256.cpp
         src/Module/BMICodec.cpp
         src/Module/BMICache.cpp
@@ -58,6 +60,7 @@ target_sources(foolc
         src/Sema/SymbolTable.ixx
         src/Sema/BorrowChecker.ixx
         src/HIR/HIR.ixx
+        src/MIR/MIR.ixx
         src/Module/BMICache.ixx
 )
 
@@ -312,6 +315,33 @@ if (BUILD_TESTING)
             set_tests_properties("foolc_hir_${HIR_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
         endforeach()
     endforeach()
+    # 14. MIR (`--dump-mir`): golden files; the verifier runs on every dump and reports failures as errors.
+    file(GLOB FOOL_MIR_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/mir/*.fl")
+    foreach(MIR_FILE ${FOOL_MIR_FILES})
+        get_filename_component(MIR_NAME "${MIR_FILE}" NAME_WE)
+        foreach(VARIANT plain roundtrip)
+            set(EXTRA_FLAG "")
+            set(TEST_SUFFIX "")
+            set(TEST_LABELS "mir")
+            if(VARIANT STREQUAL "roundtrip")
+                set(EXTRA_FLAG "--bmi-roundtrip")
+                set(TEST_SUFFIX "_roundtrip")
+                set(TEST_LABELS "mir;bmi")
+            endif()
+            add_test(NAME "foolc_mir_${MIR_NAME}${TEST_SUFFIX}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${MIR_FILE} -DFLAG=--dump-mir
+                             -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/mir/${MIR_NAME}.expected
+                             -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+            set_tests_properties("foolc_mir_${MIR_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
+        endforeach()
+    endforeach()
+    add_test(NAME foolc_mir_selftest COMMAND foolc --mir-selftest)
+    set_tests_properties(foolc_mir_selftest PROPERTIES LABELS "mir" PASS_REGULAR_EXPRESSION "mir selftest: ok")
+    # Every function of stdlib/ and examples/ that HIR lowers must also build into a verified MIR graph.
+    add_test(NAME foolc_mir_project
+             COMMAND foolc -q --project --dump-mir -I stdlib -I examples
+             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    set_tests_properties(foolc_mir_project PROPERTIES LABELS "mir;project")
     add_test(NAME foolc_calls_project
              COMMAND foolc --project --dump-calls -I stdlib -I examples
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

@@ -1,0 +1,114 @@
+fn Counter::bump(self: &Counter, by: i32) -> i32 {
+  bb0:
+    (*self#0).count = (*self#0).count + by#1
+    return (*self#0).count
+}
+
+fn Counter::peek(self: const& Counter) -> i32 {
+  bb0:
+    return (*self#0).count
+}
+
+fn swap_xy(p: *Point) {
+  let saved#1: i32;
+  bb0:
+    saved#1 = (*p#0).x
+    (*p#0).x = (*p#0).y
+    (*p#0).y = saved#1
+    return
+}
+
+fn fill(dst: *u8, value: u8, bytes: usize) {
+  let i#3: usize;
+  let _4: bool;
+  bb0:
+    i#3 = 0:usize
+    goto bb1
+  bb1:
+    _4 = i#3 < bytes#2
+    branch _4, bb2, bb4
+  bb2:
+    dst#0[i#3] = value#1
+    goto bb3
+  bb3:
+    i#3 = i#3 + 1:usize
+    goto bb1
+  bb4:
+    return
+}
+
+fn make_point(x: i32, y: i32) -> Point {
+  let _2: Point;
+  bb0:
+    _2 = new Point {x#0, y#1}
+    return _2
+}
+
+fn sum_points(a: Point, b: Point) -> i32 {
+  let _2: i32;
+  let _3: i32;
+  let _4: i32;
+  bb0:
+    _2 = a#0.x + b#1.x
+    _3 = _2 + a#0.y
+    _4 = _3 + b#1.y
+    return _4
+}
+
+fn order(c: &Counter) -> i32 {
+  let _1: const& Counter;
+  let _2: i32;
+  let _3: i32;
+  let _4: i32;
+  bb0:
+    _1 = convert:const& Counter c#0
+    _2 = call Counter::peek(_1)
+    _3 = call Counter::bump(c#0, 5:i32)
+    _4 = _2 + _3
+    return _4
+}
+
+fn optionals(c: &Counter, p: Point?) -> i32 {
+  let _2: bool;
+  let _3: Point;
+  bb0:
+    (*c#0).last = p#1
+    (*c#0).last = null:Point?
+    _2 = p#1 != null:Point?
+    branch _2, bb1, bb2
+  bb1:
+    _3 = unwrap p#1
+    return _3.x
+  bb2:
+    return 0:i32
+}
+
+fn tags(write: bool) -> Mode {
+  let _1: Mode;
+  let _2: Mode;
+  bb0:
+    branch write#0, bb1, bb2
+  bb1:
+    _1 = variant Mode::Write
+    return _1
+  bb2:
+    _2 = variant Mode::Read
+    return _2
+}
+
+fn shape() -> Shape {
+  let _0: Shape;
+  bb0:
+    _0 = variant Shape::Circle(2.0:f64)
+    return _0
+}
+
+fn convert(small: u8, wide: i64) -> i64 {
+  let _2: i64;
+  let _3: i64;
+  bb0:
+    _2 = convert:i64 small#0
+    _3 = _2 + wide#1
+    return _3
+}
+// 11 of 11 function(s) lowered

@@ -36,6 +36,7 @@ import fool.parser;
 import fool.sema;
 import fool.borrow;
 import fool.hir;
+import fool.mir;
 import fool.bmi;
 
 namespace {
@@ -56,6 +57,8 @@ struct Options {
     bool m_dump_types{false};
     bool m_dump_reflection{false};
     bool m_dump_hir{false};
+    bool m_dump_mir{false};
+    bool m_mir_selftest{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
@@ -121,6 +124,13 @@ void dump_expression_types(const fool::TypeCheckerPass2& checker) {
     }
 }
 
+/// HIR -> MIR for the checked module, verified: a verifier failure is a compiler bug and is reported as an error.
+std::string build_mir(const fool::TypeCheckerPass2& checker, const fool::SymbolTablePass0& pass0, fool::DiagnosticEngine& diag) {
+    const fool::mir::Module module = fool::mir::lower(fool::hir::lower_module(checker, pass0));
+    for (const std::string& problem : fool::mir::verify(module)) diag.error(fool::SourceSpan{}, "internal error: invalid MIR: " + problem);
+    return fool::mir::dump(module);
+}
+
 void print_cache_stats(const Options& options) {
     if (options.m_quiet || !options.m_cache->uses_disk()) return;
     const fool::BMIStats& stats = options.m_cache->stats();
@@ -149,6 +159,8 @@ void print_usage() {
         "  --dump-types           print the inferred type of every checked expression (line:col-end kind type)\n"
         "  --dump-reflection      print every class, struct and enum with its fields and whether it can be serialized\n"
         "  --dump-hir             lower the checked functions to HIR and print it (unsupported ones are listed with the reason)\n"
+        "  --mir-selftest         check that the MIR verifier reports hand-built broken graphs\n"
+        "  --dump-mir             build the MIR control-flow graph from the HIR, verify it, and print it\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -210,6 +222,7 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     if (options.m_dump_types && !diag.has_errors()) dump_expression_types(checker);
     if (options.m_dump_reflection && !diag.has_errors()) std::cout << checker.reflection_report();
     if (options.m_dump_hir && !diag.has_errors()) std::cout << fool::hir::dump(fool::hir::lower_module(checker, pass0));
+    if (options.m_dump_mir && !diag.has_errors()) std::cout << build_mir(checker, pass0, diag);
 }
 
 struct Expectation {
@@ -363,6 +376,10 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
         std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " hir:\n";
         std::cout << fool::hir::dump(fool::hir::lower_module(checker, *table));
     }
+    if (options.m_dump_mir && !diag.has_errors()) {
+        std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " mir:\n";
+        std::cout << build_mir(checker, *table, diag);
+    }
     return table;
 }
 
@@ -448,6 +465,10 @@ int main(const int argc, char** argv) {
             options.m_dump_reflection = true;
         } else if (arg == "--dump-hir") {
             options.m_dump_hir = true;
+        } else if (arg == "--mir-selftest") {
+            options.m_mir_selftest = true;
+        } else if (arg == "--dump-mir") {
+            options.m_dump_mir = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;
@@ -476,6 +497,12 @@ int main(const int argc, char** argv) {
         }
     }
 
+    if (options.m_mir_selftest) {
+        const std::vector<std::string> failures = fool::mir::selftest();
+        for (const std::string& failure : failures) std::cerr << "mir selftest: " << failure << "\n";
+        std::cout << (failures.empty() ? "mir selftest: ok\n" : "mir selftest: FAILED\n");
+        return failures.empty() ? 0 : 1;
+    }
     if (options.m_bmi_selftest) return fool::run_bmi_selftest(std::cout, options.m_files) ? 0 : 1;
 
     if (options.m_use_cache || options.m_bmi_roundtrip) {

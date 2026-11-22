@@ -427,6 +427,7 @@ fool-origin/
 │   ├── Parser/                # Pratt & recursive descent parser with error recovery
 │   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker, borrow checker
 │   ├── HIR/                   # HIR v1: typed, resolved, desugared function bodies lowered from the checked AST
+│   ├── MIR/                   # MIR v1: control-flow graph of basic blocks built from the HIR, with a verifier
 │   ├── Module/                # `.flbmi` cache: SHA-256, binary parse-tree codec, on-disk cache manager
 │   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
 ├── docs/                      # language.md (the language) and source-structure.md (the compiler's source tree)
@@ -560,7 +561,57 @@ What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` i
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
 loaded (instantiation needs the definition's body, so a generic defined in another module is not instantiated yet), and
 calls on a struct literal receiver (the checker does not bind them). The last line of the dump counts how many
-functions were lowered and how many generic templates there are. There is no MIR and no code generation yet.
+functions were lowered and how many generic templates there are.
+
+### MIR v1
+
+`foolc --dump-mir file.fl` builds the next level down (`src/MIR/`) from the HIR, verifies it, and prints it. Where the
+HIR is still a tree, the MIR is a **control-flow graph**: each function is a list of basic blocks (block 0 is the entry),
+each block is straight-line statements and one terminator, and every statement does exactly one thing.
+
+```text
+fn sum(data: const* f32, length: usize) -> f32 {
+  let total#2: f32;
+  let i#3: usize;
+  let _4: bool;
+  bb0:
+    total#2 = 0.0:f32
+    i#3 = 0:usize
+    goto bb1
+  bb1:
+    _4 = i#3 < length#1
+    branch _4, bb2, bb4
+  bb2:
+    total#2 = total#2 + data#0[i#3]
+    goto bb3
+  bb3:
+    i#3 = i#3 + 1:usize          // the step block: `continue` jumps here
+    goto bb1
+  bb4:
+    return total#2
+}
+```
+
+- **Control flow is blocks and jumps.** `if`, `while`, `for`, `break`, `continue` and early `return` become `goto`,
+  `branch cond, then, else` and `return`. `&&` and `||` become a branch that writes a bool temporary, so the right operand
+  only runs when it must. Code after a `return`/`break`/`continue` is dropped.
+- **Evaluation order is explicit.** A compound expression is a sequence of statements writing temporaries (`_4`, printed as
+  `_index`). A value read from a variable or memory is copied into a temporary first when a later operand makes a call, so
+  `c.peek() + c.bump(5)` still reads the first operand before `bump` runs.
+- **Places.** An assignable location is a local or global plus projections: `(*p#0)` dereference, `.field`, `[i#3]` index
+  (the base is a pointer). Every projection records the type it produces.
+- **Statements and terminators.** `place = rvalue`, `eval rvalue` (a call whose result is dropped), then `goto`, `branch`,
+  `return` or `unreachable` (the end of a function whose every path returns). An rvalue is one of: a plain operand, a unary or
+  binary operation, `convert`, `cast`, `&place`, `unwrap`, `wrap`, `new T {…}`, `variant Enum::V(…)` or `call f(…)`. There are
+  no phi nodes: locals are mutable slots. Calls are ordinary rvalues because the language has no unwinding yet.
+- **Types are the HIR's.** The MIR carries a copy of the HIR type table, so a type id means the same in both.
+- **Verified.** `mir::verify` checks that every block ends in a terminator, every jump and local exists, projections fit the
+  type they apply to, branch conditions are `bool`, assigned values have their place's type and returns match the function.
+  `--dump-mir` reports a violation as an internal error; `--mir-selftest` feeds the verifier hand-built broken graphs; the
+  test suite builds and verifies the MIR of every function of `stdlib/` and `examples/` that HIR lowers.
+
+Functions HIR could not lower stay "not lowerable yet" with the same reason, and generic templates are represented by their
+instantiations only. There is no optimization, no SSA and no code generation yet.
 
 ### Implementation status
 
@@ -579,7 +630,8 @@ functions were lowered and how many generic templates there are. There is no MIR
 | Lambdas, `fn(...)` types, trailing blocks, explicit `capture=[...]` | Implemented (front end, checks and cache; no code generation yet) |
 | `$serialize`, built-in `serialize(x)`, reflection intrinsics, `--dump-reflection` | Implemented (checks and metadata; no code generation yet) |
 | HIR v1 (`--dump-hir`): typed, resolved, desugared bodies, generics monomorphized | Implemented (see above; unsupported functions are reported, not skipped) |
-| MIR, code generation | **Planned** |
+| MIR v1 (`--dump-mir`): control-flow graph of basic blocks built from the HIR, verified | Implemented (see above) |
+| Code generation | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
@@ -678,6 +730,7 @@ foolc --check-borrow                    # additionally run the opt-in borrow che
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
 foolc --dump-types file.fl              # inferred type of every expression
 foolc --dump-hir file.fl                # lowered HIR of every function (or why it is not lowerable yet)
+foolc --dump-mir file.fl                # MIR control-flow graph of every lowered function (verified before printing)
 foolc --dump-reflection file.fl         # $serialize metadata: fields and why a field is not serializable
 foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)
