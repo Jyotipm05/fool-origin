@@ -107,14 +107,26 @@ codec is tested against every other fixture.
 
 **Pass 0 (`SymbolTablePass0`).** Evaluates `@target`, top-level and statement-level `@if`, module parameters and
 `constx` values, collects declarations from all files of a module and records imports. It never mutates the AST, so one
-tree can be checked under several configurations. (`active_branch` exposes which `@if` branch was selected.)
+tree can be checked under several configurations. (`active_branch` exposes which `@if` branch was selected.) A
+`namespace` is flattened here: its functions and constants are registered as `ns::name` (`find_namespace_function`,
+`find_function_from` walk outward from the namespace being checked), and the table also answers visibility
+(`is_accessible`: the declaration is `pub`, a twin declaration of the same function is, or both live in one privacy unit,
+`unit_key` = directory + file stem without a platform suffix).
 
-**Pass 1 (`ModuleGraphPass1`).** Indexes files by their declared module name, resolves `#import`s including template
-arguments, reports unresolved, self and cyclic imports, and produces the compilation order.
+**Pass 1 (`ModuleGraphPass1`).** Indexes files by their declared module name. An `#import` is a *path* (`import_base`): it
+becomes a file-system location from the root (`@std`, `@src`, `@lib`, `@sup`, `@pack`, a drive, or the importing file's
+folder), which names a same-stem unit or else a folder (`match_files`). Files not indexed yet are loaded from disk
+(`load_from_disk`) and their imports followed. The files' module sections are the dependency edges, and the result
+(`ResolvedImport`: module plus the privacy units the path covered) is what Pass 0 filters its views with. It also validates
+template arguments, reports unresolved, self and cyclic imports, and produces the compilation order.
+Pass 0 turns each resolved target into an `ImportedModule` view (files covered, `{names}` selected, `pub` re-export);
+every `find_*` lookup walks the views, so a name that was not imported is simply not found.
 
 **Pass 2 (`TypeCheckerPass2`).** Checks one module group: declaration consistency between `.fo` and `.fl`, scopes and
 shadowing, immutability, receivers, argument binding, expression types and implicit conversions, optionals, lambdas
-and captures, casts, serialization, return paths. It records for every call which declaration it bound
+and captures, casts, serialization, return paths, and visibility (`check_access` / `check_type_access` /
+`check_field_access` at each use of a function, constant, type, field or method; the `find_*` lookups themselves do not
+filter, so one error is reported at the use instead of a misleading "unknown name"). It records for every call which declaration it bound
 (`find_resolved_call`) and for every expression its inferred type (`expression_types()`); HIR lowering reads both.
 
 **Borrow checker.** Walks each function body twice (collect uses, then check) tracking which locals are borrowed while a
@@ -191,6 +203,11 @@ A change that adds or alters syntax touches the same places in the same order:
    construct a case in the printer and the verifier (`MIR/MIR.cpp`).
 7. **Tests** (below) and the **README / `docs/`**. Editor grammars live in `editors/`.
 
+Example: `pub` and `namespace` touched the lexer (two keywords), `DeclNode::m_is_pub` / `m_namespace` and `NamespaceDeclNode`
+(AST), `parse_declaration` and `parse_namespace`, the codec (a new declaration tag and fields; version 4 → 5), Pass 0
+(qualified keys, the privacy unit), every checker use site, and HIR's names (`math::square`). Migrating the standard
+library meant adding `pub` to every `.fo`; running the project check and following the "declared here" notes finds the rest.
+
 Example: the `for (init; condition; step)` loop touched `ForStmt` (AST), `parse_for`, `StmtFor` in the codec (version 3 → 4),
 the checker's scope handling, `kill_assigned_in`, the borrow checker's `walk_loop`, and HIR's `For` statement.
 
@@ -211,7 +228,7 @@ the checker's scope handling, `kill_assigned_in`, the borrow checker's `walk_loo
 | `tests/reflection/` | `--dump-reflection` golden files | `reflection` |
 | `tests/hir/` | `--dump-hir` golden files | `hir` |
 | `tests/mir/` | `--dump-mir` golden files; the verifier runs on each dump. Also `foolc_mir_selftest` and `foolc_mir_project` (every function of `stdlib/` + `examples/`) | `mir` |
-| `tests/project/` | multi-file module graphs (ok, cycle, unresolved, bad template, interface-only, ...) | `project` |
+| `tests/project/` | multi-file module graphs (ok, cycle, unresolved, bad template, interface-only, ...) and visibility (`vis_ok`, `vis_private`: one run per expected message) | `project` |
 | `tests/cache/` | the `.flbmi` cache cycle | `bmi` |
 
 Golden tests run through `tests/calls/run_golden.cmake`, which runs `foolc -q <flag> <file>` and compares the output with

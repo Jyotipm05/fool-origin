@@ -1,0 +1,9 @@
+module imp_err::main;
+
+#import @pack:nothere:x;
+#import nowhere:file;
+#import :z:nothing;
+
+fn run() -> i32 {
+    return 1;
+}

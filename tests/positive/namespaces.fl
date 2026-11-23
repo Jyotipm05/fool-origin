@@ -1,0 +1,46 @@
+module tests::namespaces;
+
+// A namespace groups functions and constants. In a file, everything is visible anyway; `pub` only matters to other files.
+pub namespace math {
+    constx TAU: f64 = 6.28;
+    constx LIMIT: i32 = 5;
+    constx TWICE: i32 = LIMIT * 2;
+
+    fn square(x: i32) -> i32 {
+        return x * x;
+    }
+
+    // Siblings are reached by their plain name inside the namespace.
+    fn cube(x: i32) -> i32 {
+        return square(x) * x;
+    }
+
+    pub namespace deep {
+        fn quad(x: i32) -> i32 {
+            return square(square(x));
+        }
+
+        fn limit() -> i32 {
+            return LIMIT + TWICE;
+        }
+    }
+}
+
+namespace helpers {
+    fn plus_one(x: i32) -> i32 {
+        return x + 1;
+    }
+}
+
+var counter: i32 = 0;
+
+fn square(x: i32) -> i32 {
+    return x + 1000;
+}
+
+fn run() -> i32 {
+    counter = math::square(3) + math::cube(2);
+    var big: f64 = math::TAU;
+    var nested: i32 = math::deep::quad(2) + math::deep::limit();
+    return helpers::plus_one(counter) + nested + math::LIMIT + math::TWICE + square(1);
+}

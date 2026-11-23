@@ -27,6 +27,8 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::StringLiteral: return "StringLiteral";
         case TokenKind::KwImport: return "import";
         case TokenKind::KwModule: return "module";
+        case TokenKind::KwPub: return "pub";
+        case TokenKind::KwNamespace: return "namespace";
         case TokenKind::KwClass: return "class";
         case TokenKind::KwRuleset: return "ruleset";
         case TokenKind::KwBlueprint: return "blueprint";
@@ -175,6 +177,8 @@ Token Lexer::make_token(TokenKind kind, SourceLocation start) {
 TokenKind Lexer::classify_keyword(std::string_view text) {
     if (text == "import")    return TokenKind::KwImport;
     if (text == "module")    return TokenKind::KwModule;
+    if (text == "pub")       return TokenKind::KwPub;
+    if (text == "namespace") return TokenKind::KwNamespace;
     if (text == "class")     return TokenKind::KwClass;
     if (text == "ruleset")   return TokenKind::KwRuleset;
     if (text == "blueprint") return TokenKind::KwBlueprint;

@@ -1,0 +1,26 @@
+module vis::shapes;
+
+// Everything in a `pub namespace` is public; a plain namespace keeps its members private to this file.
+pub namespace geo {
+    constx UNIT: i32 = 1;
+
+    fn area(w: i32, h: i32) -> i32 {
+        return w * h * UNIT;
+    }
+
+    pub namespace inner {
+        fn perimeter(w: i32, h: i32) -> i32 {
+            return 2 * (w + h) * UNIT;
+        }
+    }
+}
+
+namespace internal {
+    fn secret() -> i32 {
+        return 7;
+    }
+}
+
+pub fn shape_total() -> i32 {
+    return geo::area(2, 3) + internal::secret();
+}

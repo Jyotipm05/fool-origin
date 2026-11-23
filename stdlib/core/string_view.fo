@@ -1,12 +1,12 @@
 module std::core;
 
-class StringView {
-    bytes: const* u8;
-    length: usize;
+pub class StringView {
+    pub bytes: const* u8;
+    pub length: usize;
 
-    fn from_raw(raw: const* u8, len: usize) -> StringView;
-    fn len(this const& self) -> usize;
-    fn equals(this const& self, other: StringView) -> bool;
-    fn starts_with(this const& self, prefix: StringView) -> bool;
-    fn subview(this const& self, offset: usize, count: usize) -> StringView;
+    pub fn from_raw(raw: const* u8, len: usize) -> StringView;
+    pub fn len(this const& self) -> usize;
+    pub fn equals(this const& self, other: StringView) -> bool;
+    pub fn starts_with(this const& self, prefix: StringView) -> bool;
+    pub fn subview(this const& self, offset: usize, count: usize) -> StringView;
 }

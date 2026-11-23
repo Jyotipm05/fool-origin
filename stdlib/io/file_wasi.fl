@@ -1,5 +1,5 @@
 module std::io;
-#import std::io::wasi_ffi;
+#import @std:io:sys:ffi;
 
 fn File::open(path: StringView, mode: FileMode) -> File {
     var fd: i32 = -1;

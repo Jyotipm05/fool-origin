@@ -37,6 +37,8 @@ class Parser {
     DiagnosticEngine& m_diag;
     ModuleAST* m_current_module{nullptr};
     SymbolID m_current_section{INVALID_SYMBOL_ID}; ///< Module named by the latest 'module' line
+    SymbolID m_current_namespace{INVALID_SYMBOL_ID}; ///< Qualified name of the `namespace` being parsed (`a::b`), INVALID outside one
+    bool m_namespace_pub{false};                   ///< Some enclosing `namespace` is `pub`: its members are public
     int m_speculation_depth{0};                    ///< >0: errors are swallowed and flagged instead
     bool m_speculation_failed{false};
     bool m_no_struct_literal{false};               ///< Inside if/while/for headers: '{' opens the body
@@ -99,6 +101,8 @@ private:
     AttributeNode parse_attribute();
     void parse_module_header();
     ImportDeclNode* parse_import();
+    /// Parses `[@root:]a:b:c` into `imp` and returns it as written; empty after a reported error.
+    std::string parse_import_path(ImportDeclNode& imp);
     std::string parse_module_path();
     DeclNode* parse_conditional_decl(std::vector<AttributeNode> attrs);
     FunctionDeclNode* parse_function(bool is_async);
@@ -107,6 +111,7 @@ private:
     RulesetDeclNode* parse_ruleset();
     ClassDeclNode* parse_class(bool is_struct);
     BlueprintDeclNode* parse_blueprint();
+    NamespaceDeclNode* parse_namespace(bool is_pub);
     EnumDeclNode* parse_enum();
     VarDeclNode* parse_var_decl();
     void synchronize_declaration();

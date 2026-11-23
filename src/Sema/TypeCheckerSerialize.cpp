@@ -232,7 +232,7 @@ void TypeCheckerPass2::check_reflection_intrinsic(const IntrinsicCallExpr* intri
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(arg)) {
         const StaticType guess = intrinsic_subject(arg);
         const bool unresolved_name = guess.m_kind == StaticType::Kind::Named && lookup(id->m_identifier) == nullptr &&
-                                     !m_pass0.is_known_global(id->m_identifier) && !is_generic_parameter(id->m_identifier);
+                                     !is_known_name(id->m_identifier) && !is_generic_parameter(id->m_identifier);
         if (unresolved_name || (!guess.known() && lookup(id->m_identifier) == nullptr && !is_generic_parameter(id->m_identifier))) {
             m_diag.error(arg->m_span, spelling + ": '" + name_of(id->m_identifier) + "' is neither a type nor a variable");
             return;

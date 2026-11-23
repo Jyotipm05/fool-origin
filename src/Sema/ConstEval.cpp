@@ -42,7 +42,27 @@ std::optional<ConstValue> ConstEvaluator::evaluate(const ExprNode* expr, bool re
     if (const auto* lit = dynamic_cast<const FloatLiteralExpr*>(expr)) return ConstValue::from_float(lit->m_value);
     if (const auto* lit = dynamic_cast<const BooleanLiteralExpr*>(expr)) return ConstValue::from_bool(lit->m_value);
 
+    if (const auto* path = dynamic_cast<const PathExpr*>(expr)) {
+        // `ns::NAME`: a constant of a namespace, stored under its qualified name.
+        std::string joined;
+        for (size_t i = 0; i < path->m_segments.size(); ++i) {
+            if (i != 0) joined += "::";
+            joined += std::string(StringInterner::get().resolve(path->m_segments[i]));
+        }
+        auto it = m_table.find(StringInterner::get().intern(joined));
+        if (it != m_table.end()) return it->second;
+        return fail(expr, report, "'" + joined + "' is not a known compile-time constant");
+    }
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(expr)) {
+        // Inside a namespace a bare name may be a sibling constant: innermost namespace first.
+        for (SymbolID ns = m_namespace; ns != INVALID_SYMBOL_ID;) {
+            std::string_view ns_text = StringInterner::get().resolve(ns);
+            auto qualified = m_table.find(StringInterner::get().intern(std::string(ns_text) + "::" +
+                                                                         std::string(StringInterner::get().resolve(id->m_identifier))));
+            if (qualified != m_table.end()) return qualified->second;
+            const size_t cut = ns_text.rfind("::");
+            ns = cut == std::string_view::npos ? INVALID_SYMBOL_ID : StringInterner::get().intern(std::string(ns_text.substr(0, cut)));
+        }
         auto it = m_table.find(id->m_identifier);
         if (it != m_table.end()) return it->second;
         return fail(expr, report, "'" + std::string(StringInterner::get().resolve(id->m_identifier)) +

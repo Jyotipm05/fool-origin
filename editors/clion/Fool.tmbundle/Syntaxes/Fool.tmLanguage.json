@@ -158,11 +158,11 @@
         },
         {
           "name": "storage.type.declaration.fool",
-          "match": "\\b(module|ruleset|blueprint|class|enum)\\b"
+          "match": "\\b(module|namespace|ruleset|blueprint|class|enum)\\b"
         },
         {
           "name": "keyword.declaration.function.fool",
-          "match": "\\b(fn|async|await)\\b"
+          "match": "\\b(fn|async|await|pub)\\b"
         },
         {
           "name": "keyword.control.flow.fool",

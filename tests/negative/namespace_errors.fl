@@ -1,0 +1,22 @@
+module tests::namespace_errors;
+
+namespace ok {
+    fn f() -> i32 {
+        return 1;
+    }
+}
+
+// expect-error: functions of namespace 'ok' are written inside its block
+fn ok::g() -> i32 {
+    return 2;
+}
+
+namespace dup {
+    fn h() -> i32 {
+        return 1;
+    }
+    // expect-error: redefinition of 'h'
+    fn h() -> i32 {
+        return 2;
+    }
+}

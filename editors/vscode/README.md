@@ -9,7 +9,7 @@ Official syntax highlighting, code snippets, and IntelliSense configuration for 
   - `.fl`: Implementation Units
   - `.fex`: Platform Overlays & Foreign ABI Bindings
 - **Accurate Syntax Highlighting**:
-  - Module imports: `#import <module_path>;`
+  - Module imports: `#import <path>;`, `#import {a, b} from <path>;`, `pub #import <path>;`
   - Compile-time constants: `constx`
   - Strict immutability bindings: `const`
   - Mutable state: `=` and `var`

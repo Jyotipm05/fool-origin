@@ -5,7 +5,7 @@
 
 module examples::receivers_and_mutability;
 
-#import std::core;
+#import @std:core;
 
 // 1. Explicit Immutable Receiver (Query / Read-only borrow)
 fn ByteBuffer::length(this const& self) -> usize {

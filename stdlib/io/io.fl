@@ -1,6 +1,6 @@
 module std::io;
-#import std::core;
-#import std::io::sys_file;
+#import @std:core;
+#import @std:io:sys:file;
 
 fn IO::print(msg: StringView) {
     sys_file::stdout_write(msg.bytes, msg.length);

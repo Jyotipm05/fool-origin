@@ -5,8 +5,8 @@
 
 module examples::full_program;
 
-#import std::core;
-#import std::io;
+#import @std:core;
+#import @std:io;
 
 fn SessionManager::start(this &self) -> bool {
     if (self.is_running) {

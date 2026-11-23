@@ -5,20 +5,20 @@
 
 module examples::full_program;
 
-#import std::core;
-#import std::io;
+#import @std:core;
+#import @std:io;
 
-constx MAX_ENTRIES: usize = 256;
-constx DEFAULT_PORT: u16 = 8080;
+pub constx MAX_ENTRIES: usize = 256;
+pub constx DEFAULT_PORT: u16 = 8080;
 
-class SessionManager {
-    active_count: usize;
-    is_running: bool;
+pub class SessionManager {
+    pub active_count: usize;
+    pub is_running: bool;
 
-    fn start(this &self) -> bool;
-    fn get_active_sessions(this const& self) -> usize;
-    fn stop(this self);
+    pub fn start(this &self) -> bool;
+    pub fn get_active_sessions(this const& self) -> usize;
+    pub fn stop(this self);
 }
 
-fn main() -> i32;
+pub fn main() -> i32;
 

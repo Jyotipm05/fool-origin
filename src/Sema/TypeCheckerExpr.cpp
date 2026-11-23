@@ -46,13 +46,16 @@ SymbolID nominal_name(const TypeNode* type) {
 
 const FunctionDeclNode* TypeCheckerPass2::resolve_callee(const CallExpr* call) const {
     if (const auto* id = dynamic_cast<const IdentifierExpr*>(call->m_callee)) {
-        return m_pass0.find_function(id->m_identifier);
+        return m_pass0.find_function_from(m_namespace, id->m_identifier);
     }
     if (const auto* path = dynamic_cast<const PathExpr*>(call->m_callee)) {
-        if (path->m_segments.size() != 2) return nullptr;
-        if (const FunctionDeclNode* method = m_pass0.find_method(path->m_segments[0], path->m_segments[1])) {
-            return method;
+        if (path->m_segments.size() == 2) {
+            if (const FunctionDeclNode* method = m_pass0.find_method(path->m_segments[0], path->m_segments[1])) {
+                return method;
+            }
         }
+        if (const FunctionDeclNode* fn = m_pass0.find_namespace_function(path_segments(path), m_namespace)) return fn;
+        if (path->m_segments.size() != 2) return nullptr;
         return m_pass0.find_function_in_import(path->m_segments[0], path->m_segments[1]);
     }
     return nullptr;
@@ -104,7 +107,11 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
             return;
         }
         if (report_uncaptured(id->m_identifier, expr->m_span)) return;
-        if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) && !is_generic_parameter(id->m_identifier)) {
+        if (const VarDeclNode* global = m_pass0.find_global_from(m_namespace, id->m_identifier)) {
+            check_access(global, expr->m_span, global->m_kind == BindingKind::Constx ? "constant" : "variable", name_of(id->m_identifier));
+            return;
+        }
+        if (m_strict_names && !is_known_name(id->m_identifier) && !is_generic_parameter(id->m_identifier)) {
             m_diag.error(expr->m_span, "use of undeclared identifier '" + name_of(id->m_identifier) + "'");
         }
     } else if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
@@ -113,6 +120,23 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
         SymbolID first = path->m_segments.front();
         bool known_type = m_pass0.find_class(first) != nullptr || m_pass0.find_enum(first) != nullptr ||
                           m_pass0.find_blueprint(first) != nullptr || m_pass0.find_ruleset(first) != nullptr;
+        if (!known_type && (m_pass0.is_namespace_from(m_namespace, first) || (path->m_segments.size() >= 2 && m_pass0.is_import_alias(first)))) {
+            // `ns::NAME`, `outer::inner::NAME` or `alias::NAME`: a constant or variable of a namespace or an imported module.
+            // (A function named this way is checked where it is called.)
+            if (const VarDeclNode* global = m_pass0.find_namespace_global(path_segments(path), m_namespace)) {
+                std::string text;
+                for (SymbolID segment : path->m_segments) text += (text.empty() ? "" : "::") + name_of(segment);
+                check_access(global, expr->m_span, global->m_kind == BindingKind::Constx ? "constant" : "variable", text);
+            }
+            return;
+        }
+        if (known_type) {
+            const DeclNode* type_decl = m_pass0.find_class(first);
+            if (type_decl == nullptr) type_decl = m_pass0.find_enum(first);
+            if (type_decl == nullptr) type_decl = m_pass0.find_ruleset(first);
+            if (type_decl == nullptr) type_decl = m_pass0.find_blueprint(first);
+            check_access(type_decl, expr->m_span, "type", name_of(first));
+        }
         if (path->m_segments.size() == 2) {
             SymbolID second = path->m_segments[1];
             if (const EnumDeclNode* en = m_pass0.find_enum(first)) {
@@ -126,7 +150,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
             }
         }
         if (m_strict_names && !known_type && !m_pass0.is_import_alias(first) && !is_generic_parameter(first) &&
-            lookup(first) == nullptr && !m_pass0.is_known_global(first)) {
+            lookup(first) == nullptr && !is_known_name(first)) {
             m_diag.error(expr->m_span, "unknown name '" + name_of(first) + "' in qualified path");
         }
     } else if (const auto* lit = dynamic_cast<const StructLiteralExpr*>(expr)) {
@@ -154,6 +178,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
         }
     } else if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) {
         check_expression(cast->m_operand);
+        check_type_access(cast->m_target, cast->m_span);
         if (cast->m_cast_kind != CastKind::Unchecked) check_named_cast(cast);
     } else if (const auto* member = dynamic_cast<const MemberExpr*>(expr)) {
         check_member_access(member);
@@ -183,13 +208,17 @@ void TypeCheckerPass2::check_member_access(const MemberExpr* member) {
     const ClassDeclNode* cls = class_of_binding(*binding);
     if (cls == nullptr || cls->m_fields.empty()) return;
     for (const ParameterDecl& field : cls->m_fields) {
-        if (field.m_name == member->m_member) return;
+        if (field.m_name == member->m_member) {
+            check_field_access(cls, field, member->m_span);
+            return;
+        }
     }
     m_diag.error(member->m_span, "'" + name_of(cls->m_name) + "' has no field '" + name_of(member->m_member) + "'");
 }
 
 void TypeCheckerPass2::check_struct_literal(const StructLiteralExpr* lit) {
     for (const FieldInit& field : lit->m_fields) check_expression(field.m_value);
+    check_type_access(lit->m_type, lit->m_span);
 
     SymbolID type_name = nominal_name(lit->m_type);
     const ClassDeclNode* cls = type_name != INVALID_SYMBOL_ID ? m_pass0.find_class(type_name) : nullptr;
@@ -198,7 +227,11 @@ void TypeCheckerPass2::check_struct_literal(const StructLiteralExpr* lit) {
     std::set<SymbolID> provided;
     for (const FieldInit& init : lit->m_fields) {
         bool exists = false;
-        for (const ParameterDecl& field : cls->m_fields) exists = exists || field.m_name == init.m_name;
+        for (const ParameterDecl& field : cls->m_fields) {
+            if (field.m_name != init.m_name) continue;
+            exists = true;
+            check_field_access(cls, field, init.m_span);
+        }
         if (!exists) {
             m_diag.error(init.m_span, "'" + name_of(cls->m_name) + "' has no field '" + name_of(init.m_name) + "'");
         } else if (!provided.insert(init.m_name).second) {
@@ -266,7 +299,8 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
             return;
         }
         if (report_uncaptured(name, lhs->m_span)) return;
-        if (const VarDeclNode* global = m_pass0.find_global(name)) {
+        if (const VarDeclNode* global = m_pass0.find_global_from(m_namespace, name)) {
+            check_access(global, lhs->m_span, "variable", name_of(name));
             if (global->m_kind != BindingKind::Mutable) {
                 m_diag.error(lhs->m_span, "cannot assign to " +
                                           std::string(global->m_kind == BindingKind::Constx ? "constant" : "immutable binding") +
@@ -276,7 +310,7 @@ void TypeCheckerPass2::check_assignment(const BinaryExpr* assign) {
             }
             return;
         }
-        if (m_pass0.is_known_global(name)) {
+        if (is_known_name(name)) {
             m_diag.error(lhs->m_span, "cannot assign to '" + name_of(name) + "': it is not a variable");
             return;
         }
@@ -422,26 +456,33 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
         if (const SymbolBinding* local = lookup(id->m_identifier)) {
             check_expression(call->m_callee); // calling a local value
             callee_lambda = local->m_lambda;
-        } else if (const FunctionDeclNode* fn = m_pass0.find_function(id->m_identifier)) {
+        } else if (const FunctionDeclNode* fn = m_pass0.find_function_from(m_namespace, id->m_identifier)) {
             target = fn;
+            check_access(fn, call->m_callee->m_span, "function", display);
+            if (fn->m_namespace != INVALID_SYMBOL_ID && fn->m_owner == INVALID_SYMBOL_ID) display = name_of(fn->m_namespace) + "::" + display;
         } else if (is_builtin_serialize(id->m_identifier)) {
             builtin_serialize = true;
         } else if (report_uncaptured(id->m_identifier, call->m_callee->m_span)) {
             // a variable of the enclosing code used as a function without being captured
-        } else if (m_strict_names && !m_pass0.is_known_global(id->m_identifier) &&
+        } else if (m_strict_names && !is_known_name(id->m_identifier) &&
                    !is_generic_parameter(id->m_identifier)) {
             m_diag.error(call->m_callee->m_span, "call to undeclared function '" + display + "'");
         }
     } else if (const auto* path = dynamic_cast<const PathExpr*>(call->m_callee)) {
         check_expression(call->m_callee);
-        if (path->m_segments.size() == 2) {
-            SymbolID first = path->m_segments[0];
-            SymbolID second = path->m_segments[1];
-            display = name_of(first) + "::" + name_of(second);
-            if (const FunctionDeclNode* method = m_pass0.find_method(first, second)) {
-                if (method->m_receiver.m_kind == ReceiverKind::None) target = method;
-            } else if (const FunctionDeclNode* fn = m_pass0.find_function_in_import(first, second)) {
-                target = fn;
+        for (SymbolID segment : path->m_segments) display += (display.empty() ? "" : "::") + name_of(segment);
+        const FunctionDeclNode* method = path->m_segments.size() == 2 ? m_pass0.find_method(path->m_segments[0], path->m_segments[1]) : nullptr;
+        if (method != nullptr) {
+            if (method->m_receiver.m_kind == ReceiverKind::None) target = method;
+            check_method_access(method, path->m_segments[0], call->m_callee->m_span);
+        } else if (const FunctionDeclNode* fn = m_pass0.find_namespace_function(path_segments(path), m_namespace)) {
+            target = fn;
+            check_access(fn, call->m_callee->m_span, "function", display);
+            if (fn->m_namespace != INVALID_SYMBOL_ID) display = name_of(fn->m_namespace) + "::" + name_of(fn->m_name);
+        } else if (path->m_segments.size() == 2) {
+            if (const FunctionDeclNode* imported = m_pass0.find_function_in_import(path->m_segments[0], path->m_segments[1])) {
+                target = imported;
+                check_access(imported, call->m_callee->m_span, "function", display);
             }
         }
     } else if (const auto* member = dynamic_cast<const MemberExpr*>(call->m_callee)) {
@@ -459,6 +500,7 @@ void TypeCheckerPass2::check_call(const CallExpr* call) {
                 m_diag.error(member->m_span, "'" + name_of(cls->m_name) + "' has no method '" + display + "'");
             } else if (method != nullptr) {
                 target = method;
+                check_method_access(method, cls->m_name, member->m_span);
                 receiver_object = member->m_object;
                 display = name_of(cls->m_name) + "::" + display;
                 std::string binding_name = name_of(binding->m_name);

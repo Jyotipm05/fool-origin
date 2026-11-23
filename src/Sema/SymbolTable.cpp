@@ -11,8 +11,11 @@ module;
 
 #include <cstddef>
 #include <cstdint>
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -109,12 +112,50 @@ std::string type_to_string(const TypeNode* type) {
     return "?";
 }
 
+std::string unit_key(std::string_view file) {
+    std::filesystem::path path = std::filesystem::path(std::string(file)).lexically_normal();
+    std::string stem = path.stem().string();
+    const size_t underscore = stem.rfind('_');
+    if (underscore != std::string::npos) {
+        const std::string_view suffix = std::string_view(stem).substr(underscore + 1);
+        for (std::string_view platform : {"linux", "epoll", "darwin", "kqueue", "windows", "iocp", "posix", "wasi", "wasm"}) {
+            if (suffix == platform) { stem.resize(underscore); break; }
+        }
+    }
+    return (path.parent_path() / stem).generic_string();
+}
+
 namespace {
+
+SymbolID qualify(SymbolID ns, SymbolID name) {
+    if (ns == INVALID_SYMBOL_ID) return name;
+    return StringInterner::get().intern(std::string(text_of(ns)) + "::" + std::string(text_of(name)));
+}
+
+SymbolID join_path(const std::vector<SymbolID>& path, size_t from) {
+    std::string text;
+    for (size_t i = from; i < path.size(); ++i) {
+        if (i != from) text += "::";
+        text += std::string(text_of(path[i]));
+    }
+    return StringInterner::get().intern(text);
+}
+
+SymbolID parent_namespace(SymbolID ns) {
+    const std::string_view text = text_of(ns);
+    const size_t cut = text.rfind("::");
+    if (cut == std::string_view::npos) return INVALID_SYMBOL_ID;
+    return StringInterner::get().intern(std::string(text.substr(0, cut)));
+}
 
 void assign_file_recursive(const std::vector<DeclNode*>& decls, std::string_view file) {
     for (DeclNode* decl : decls) {
         if (decl == nullptr) continue;
         decl->m_file = file;
+        if (auto* ns = dynamic_cast<NamespaceDeclNode*>(decl)) assign_file_recursive(ns->m_declarations, file);
+        if (auto* cls = dynamic_cast<ClassDeclNode*>(decl)) {
+            for (FunctionDeclNode* method : cls->m_methods) method->m_file = file;
+        }
         if (auto* block = dynamic_cast<ConditionalDeclBlock*>(decl)) {
             for (const ConditionalDeclBranch& branch : block->m_branches) {
                 assign_file_recursive(branch.m_declarations, file);
@@ -265,6 +306,12 @@ void SymbolTablePass0::collect_one(DeclNode* decl, SymbolID section) {
         ++m_pruned_count;
         return;
     }
+    if (auto* ns = dynamic_cast<NamespaceDeclNode*>(decl)) {
+        // A namespace is only a scope: its functions and constants join the module under `ns::name`.
+        m_namespaces.insert(qualify(ns->m_namespace, ns->m_name));
+        for (DeclNode* child : ns->m_declarations) collect_one(child, INVALID_SYMBOL_ID);
+        return;
+    }
     m_active_decls.push_back(decl);
     register_declaration(decl);
 }
@@ -275,8 +322,10 @@ void SymbolTablePass0::register_declaration(DeclNode* decl) {
     };
 
     if (auto* fn = dynamic_cast<FunctionDeclNode*>(decl)) {
+        const SymbolID key = fn->m_owner != INVALID_SYMBOL_ID ? fn->m_name : qualify(fn->m_namespace, fn->m_name);
+        if (fn->m_is_pub) m_pub_functions.emplace(fn->m_owner, key);
         if (fn->m_owner != INVALID_SYMBOL_ID) m_methods[fn->m_owner].push_back(fn);
-        else m_functions[fn->m_name].push_back(fn);
+        else m_functions[key].push_back(fn);
     } else if (auto* cls = dynamic_cast<ClassDeclNode*>(decl)) {
         if (!m_classes.emplace(cls->m_name, cls).second) redefinition(cls->m_is_struct ? "struct" : "class", cls->m_name);
     } else if (auto* ruleset = dynamic_cast<RulesetDeclNode*>(decl)) {
@@ -288,7 +337,9 @@ void SymbolTablePass0::register_declaration(DeclNode* decl) {
     } else if (auto* import_decl = dynamic_cast<ImportDeclNode*>(decl)) {
         m_import_decls.push_back(import_decl);
     } else if (auto* var = dynamic_cast<VarDeclNode*>(decl)) {
-        auto existing = m_globals.find(var->m_name);
+        const SymbolID key = qualify(var->m_namespace, var->m_name);
+        if (var->m_is_pub) m_pub_globals.insert(key);
+        auto existing = m_globals.find(key);
         if (existing != m_globals.end()) {
             // A constant may be repeated in the interface (.fo) and the implementation (.fl) as
             // long as both declarations agree on kind, type and value.
@@ -297,46 +348,175 @@ void SymbolTablePass0::register_declaration(DeclNode* decl) {
             if (same && var->m_kind == BindingKind::Constx && var->m_initializer != nullptr) {
                 DiagnosticEngine scratch;
                 scratch.set_echo(false);
-                ConstEvaluator evaluator(m_definitions, scratch, m_target.m_pointer_width);
+                ConstEvaluator evaluator(m_definitions, scratch, m_target.m_pointer_width, var->m_namespace);
                 auto value = evaluator.evaluate(var->m_initializer);
-                auto previous = m_definitions.find(var->m_name);
+                auto previous = m_definitions.find(key);
                 same = value.has_value() && previous != m_definitions.end() &&
                        value->to_string() == previous->second.to_string();
             } else if (same) {
                 same = false; // only constants may be declared twice
             }
-            if (!same) redefinition("variable", var->m_name);
+            if (!same) redefinition("variable", key);
             return;
         }
-        m_globals.emplace(var->m_name, var);
+        m_globals.emplace(key, var);
         if (var->m_kind == BindingKind::Constx && var->m_initializer != nullptr) {
-            ConstEvaluator evaluator(m_definitions, m_diag, m_target.m_pointer_width);
-            if (auto value = evaluator.evaluate(var->m_initializer)) m_definitions[var->m_name] = *value;
+            ConstEvaluator evaluator(m_definitions, m_diag, m_target.m_pointer_width, var->m_namespace);
+            if (auto value = evaluator.evaluate(var->m_initializer)) m_definitions[key] = *value;
         }
     }
 }
 
-void SymbolTablePass0::add_import(ImportDeclNode* decl, const SymbolTablePass0* table) {
-    m_imports.push_back(ImportedModule{decl->m_module_path, table});
+bool ImportedModule::admits_name(SymbolID key) const {
+    if (!m_selective) return true;
+    const std::string_view text = text_of(key);
+    const size_t cut = text.find("::");
+    return m_only.find(cut == std::string_view::npos ? text : text.substr(0, cut)) != m_only.end();
 }
 
-// --- lookups (local first, then one level of imports)
+bool ImportedModule::admits_file(std::string_view file) const {
+    if (m_units.empty() || file.empty()) return true;
+    auto cached = m_file_cache.find(file);
+    if (cached != m_file_cache.end()) return cached->second;
+    const bool admitted = m_units.count(unit_key(file)) != 0;
+    m_file_cache.emplace(file, admitted);
+    return admitted;
+}
+
+namespace {
+
+/// The view of `inner` (something an imported module re-exports) as seen through the import `outer`.
+ImportedModule compose(const ImportedModule& outer, const ImportedModule& inner) {
+    ImportedModule view;
+    view.m_name = inner.m_name;
+    view.m_table = inner.m_table;
+    view.m_decl = outer.m_decl;
+    view.m_alias = outer.m_alias;
+    view.m_units = inner.m_units;
+    view.m_is_pub = outer.m_is_pub;
+    view.m_direct = false;
+    if (outer.m_selective && inner.m_selective) {
+        view.m_selective = true;
+        for (const std::string& name : outer.m_only) {
+            if (inner.m_only.count(name) != 0) view.m_only.insert(name);
+        }
+    } else if (outer.m_selective || inner.m_selective) {
+        view.m_selective = true;
+        view.m_only = outer.m_selective ? outer.m_only : inner.m_only;
+    }
+    return view;
+}
+
+} // namespace
+
+void SymbolTablePass0::add_import(const ImportDeclNode* decl, SymbolID module, const SymbolTablePass0* table,
+                                  std::set<std::string> units) {
+    ImportedModule imp;
+    imp.m_name = module;
+    imp.m_table = table;
+    imp.m_decl = decl;
+    imp.m_alias = decl->m_segments.empty() ? INVALID_SYMBOL_ID : decl->m_segments.back();
+    imp.m_units = std::move(units);
+    imp.m_selective = decl->m_selective;
+    for (SymbolID name : decl->m_names) imp.m_only.emplace(text_of(name));
+    imp.m_is_pub = decl->m_is_pub;
+    m_imports.push_back(imp);
+    m_views.push_back(imp);
+    if (imp.m_is_pub) m_exports.push_back(imp);
+    if (table == nullptr) return;
+    for (const ImportedModule& inner : table->m_exports) {
+        m_views.push_back(compose(imp, inner));
+        if (imp.m_is_pub) m_exports.push_back(compose(imp, inner));
+    }
+}
+
+void SymbolTablePass0::check_selective_imports() const {
+    std::map<const ImportDeclNode*, std::vector<const ImportedModule*>> groups;
+    for (const ImportedModule& view : m_views) {
+        if (view.m_decl != nullptr && view.m_decl->m_selective) groups[view.m_decl].push_back(&view);
+    }
+    for (const auto& [decl, views] : groups) {
+        const std::string saved = m_diag.current_file();
+        m_diag.set_current_file(std::string(decl->m_file));
+        for (SymbolID name : decl->m_names) {
+            bool exists = false;
+            bool usable = false;
+            const DeclNode* private_hit = nullptr;
+            for (const ImportedModule* view : views) {
+                if (view->m_table == nullptr) { exists = usable = true; break; }   // unresolved: reported elsewhere
+                if (!view->admits_name(name)) continue;
+                const SymbolTablePass0& table = *view->m_table;
+                // Is `name` declared by this module, in a file the import covers? (A namespace has no single declaration.)
+                bool hit_exists = false;
+                const DeclNode* hit_decl = nullptr;
+                auto fn = table.m_functions.find(name);
+                if (fn != table.m_functions.end()) {
+                    for (const FunctionDeclNode* f : fn->second) {
+                        if (view->admits_file(f->m_file)) { hit_exists = true; hit_decl = f; break; }
+                    }
+                }
+                for (const DeclNode* other : {static_cast<const DeclNode*>(table.find_local_class(name)),
+                                              static_cast<const DeclNode*>(table.find_local_enum(name)),
+                                              static_cast<const DeclNode*>(table.find_local_ruleset(name)),
+                                              static_cast<const DeclNode*>(table.find_local_blueprint(name)),
+                                              static_cast<const DeclNode*>(table.find_local_global(name))}) {
+                    if (hit_exists || other == nullptr || !view->admits_file(other->m_file)) continue;
+                    hit_exists = true;
+                    hit_decl = other;
+                }
+                if (!hit_exists && table.m_namespaces.count(name) != 0) hit_exists = true;
+                if (!hit_exists) continue;
+                exists = true;
+                if (hit_decl == nullptr || table.is_accessible(hit_decl, decl->m_file)) { usable = true; break; }
+                private_hit = hit_decl;
+            }
+            const std::string spelled(text_of(name));
+            if (!exists) {
+                m_diag.error(decl->m_span, "'" + spelled + "' is not declared in '" + std::string(text_of(decl->m_module_path)) + "'");
+            } else if (!usable && private_hit != nullptr) {
+                m_diag.error(decl->m_span, "'" + spelled + "' is private to '" + std::filesystem::path(std::string(private_hit->m_file)).filename().string() +
+                                           "'; declare it `pub` to import it");
+                m_diag.set_current_file(std::string(private_hit->m_file));
+                m_diag.note(private_hit->m_span, "'" + spelled + "' is declared here without `pub`");
+                m_diag.set_current_file(std::string(decl->m_file));
+            }
+        }
+        m_diag.set_current_file(saved);
+    }
+}
+
+// --- lookups (local first, then the imports and what they re-export)
+
+namespace {
+
+bool alias_matches(const ImportedModule& imp, std::string_view alias_text) {
+    if (imp.m_alias != INVALID_SYMBOL_ID && text_of(imp.m_alias) == alias_text) return true;
+    const std::string_view full = text_of(imp.m_name);
+    return full == alias_text || last_segment(full) == alias_text;
+}
+
+} // namespace
 
 FunctionDeclNode* SymbolTablePass0::find_function(SymbolID name) const {
     auto it = m_functions.find(name);
     if (it != m_functions.end() && !it->second.empty()) return it->second.front();
-    for (const ImportedModule& imp : m_imports) {
+    for (const ImportedModule& imp : m_views) {
         if (imp.m_table == nullptr) continue;
         auto imp_it = imp.m_table->m_functions.find(name);
-        if (imp_it != imp.m_table->m_functions.end() && !imp_it->second.empty()) return imp_it->second.front();
+        if (imp_it == imp.m_table->m_functions.end()) continue;
+        for (FunctionDeclNode* fn : imp_it->second) {
+            if (imp.admits(name, fn)) return fn;
+        }
     }
     return nullptr;
 }
 
 FunctionDeclNode* SymbolTablePass0::find_method(SymbolID owner, SymbolID name) const {
-    auto search = [&](const SymbolTablePass0& table) -> FunctionDeclNode* {
+    auto search = [&](const SymbolTablePass0& table, const ImportedModule* view) -> FunctionDeclNode* {
+        if (view != nullptr && !view->admits_name(owner)) return nullptr;
         auto cls = table.m_classes.find(owner);
-        if (cls != table.m_classes.end()) {
+        const bool class_ok = cls != table.m_classes.end() && (view == nullptr || view->admits_file(cls->second->m_file));
+        if (class_ok) {
             for (FunctionDeclNode* method : cls->second->m_methods) {
                 if (method->m_name == name) return method;
             }
@@ -344,73 +524,63 @@ FunctionDeclNode* SymbolTablePass0::find_method(SymbolID owner, SymbolID name) c
         auto impls = table.m_methods.find(owner);
         if (impls != table.m_methods.end()) {
             for (FunctionDeclNode* method : impls->second) {
-                if (method->m_name == name) return method;
+                if (method->m_name != name) continue;
+                if (view == nullptr || class_ok || view->admits_file(method->m_file)) return method;
             }
         }
         return nullptr;
     };
-    if (FunctionDeclNode* local = search(*this)) return local;
-    for (const ImportedModule& imp : m_imports) {
+    if (FunctionDeclNode* local = search(*this, nullptr)) return local;
+    for (const ImportedModule& imp : m_views) {
         if (imp.m_table == nullptr) continue;
-        if (FunctionDeclNode* found = search(*imp.m_table)) return found;
+        if (FunctionDeclNode* found = search(*imp.m_table, &imp)) return found;
     }
     return nullptr;
 }
 
+#define FOOL_FIND_IN_VIEWS(MAP, NAME)                                                  \
+    for (const ImportedModule& imp : m_views) {                                         \
+        if (imp.m_table == nullptr) continue;                                           \
+        auto imp_it = imp.m_table->MAP.find(NAME);                                      \
+        if (imp_it != imp.m_table->MAP.end() && imp.admits(NAME, imp_it->second)) return imp_it->second; \
+    }
+
 ClassDeclNode* SymbolTablePass0::find_class(SymbolID name) const {
     auto it = m_classes.find(name);
     if (it != m_classes.end()) return it->second;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        auto imp_it = imp.m_table->m_classes.find(name);
-        if (imp_it != imp.m_table->m_classes.end()) return imp_it->second;
-    }
+    FOOL_FIND_IN_VIEWS(m_classes, name)
     return nullptr;
 }
 
 RulesetDeclNode* SymbolTablePass0::find_ruleset(SymbolID name) const {
     auto it = m_rulesets.find(name);
     if (it != m_rulesets.end()) return it->second;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        auto imp_it = imp.m_table->m_rulesets.find(name);
-        if (imp_it != imp.m_table->m_rulesets.end()) return imp_it->second;
-    }
+    FOOL_FIND_IN_VIEWS(m_rulesets, name)
     return nullptr;
 }
 
 VarDeclNode* SymbolTablePass0::find_global(SymbolID name) const {
     auto it = m_globals.find(name);
     if (it != m_globals.end()) return it->second;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        auto imp_it = imp.m_table->m_globals.find(name);
-        if (imp_it != imp.m_table->m_globals.end()) return imp_it->second;
-    }
+    FOOL_FIND_IN_VIEWS(m_globals, name)
     return nullptr;
 }
 
 BlueprintDeclNode* SymbolTablePass0::find_blueprint(SymbolID name) const {
     auto it = m_blueprints.find(name);
     if (it != m_blueprints.end()) return it->second;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        auto imp_it = imp.m_table->m_blueprints.find(name);
-        if (imp_it != imp.m_table->m_blueprints.end()) return imp_it->second;
-    }
+    FOOL_FIND_IN_VIEWS(m_blueprints, name)
     return nullptr;
 }
 
 EnumDeclNode* SymbolTablePass0::find_enum(SymbolID name) const {
     auto it = m_enums.find(name);
     if (it != m_enums.end()) return it->second;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        auto imp_it = imp.m_table->m_enums.find(name);
-        if (imp_it != imp.m_table->m_enums.end()) return imp_it->second;
-    }
+    FOOL_FIND_IN_VIEWS(m_enums, name)
     return nullptr;
 }
+
+#undef FOOL_FIND_IN_VIEWS
 
 bool SymbolTablePass0::is_known_global(SymbolID name) const {
     auto known_locally = [&](const SymbolTablePass0& t) {
@@ -419,31 +589,138 @@ bool SymbolTablePass0::is_known_global(SymbolID name) const {
                t.m_definitions.count(name) != 0;
     };
     if (known_locally(*this)) return true;
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table != nullptr && known_locally(*imp.m_table)) return true;
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table != nullptr && imp.admits_name(name) && known_locally(*imp.m_table)) return true;
     }
     return false;
 }
 
 bool SymbolTablePass0::is_import_alias(SymbolID alias) const {
-    std::string_view alias_text = text_of(alias);
-    for (const ImportedModule& imp : m_imports) {
-        std::string_view full = text_of(imp.m_name);
-        if (full == alias_text || last_segment(full) == alias_text) return true;
+    const std::string_view alias_text = text_of(alias);
+    for (const ImportedModule& imp : m_views) {
+        if (alias_matches(imp, alias_text)) return true;
     }
     return false;
 }
 
 FunctionDeclNode* SymbolTablePass0::find_function_in_import(SymbolID alias, SymbolID name) const {
-    std::string_view alias_text = text_of(alias);
-    for (const ImportedModule& imp : m_imports) {
-        if (imp.m_table == nullptr) continue;
-        std::string_view full = text_of(imp.m_name);
-        if (full != alias_text && last_segment(full) != alias_text) continue;
+    const std::string_view alias_text = text_of(alias);
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table == nullptr || !alias_matches(imp, alias_text)) continue;
         auto it = imp.m_table->m_functions.find(name);
-        if (it != imp.m_table->m_functions.end() && !it->second.empty()) return it->second.front();
+        if (it == imp.m_table->m_functions.end()) continue;
+        for (FunctionDeclNode* fn : it->second) {
+            if (imp.admits(name, fn)) return fn;
+        }
     }
     return nullptr;
+}
+
+bool SymbolTablePass0::is_namespace(SymbolID qualified) const {
+    if (m_namespaces.count(qualified) != 0) return true;
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table != nullptr && imp.admits_name(qualified) && imp.m_table->m_namespaces.count(qualified) != 0) return true;
+    }
+    return false;
+}
+
+FunctionDeclNode* SymbolTablePass0::find_namespace_function(const std::vector<SymbolID>& path, SymbolID current) const {
+    if (path.size() < 2) return nullptr;
+    const SymbolID joined = join_path(path, 0);
+    for (SymbolID ns = current; ; ns = parent_namespace(ns)) {
+        auto it = m_functions.find(qualify(ns, joined));
+        if (it != m_functions.end() && !it->second.empty()) return it->second.front();
+        if (ns == INVALID_SYMBOL_ID) break;
+    }
+    // `ns::f` where `ns` is a namespace of an imported module (imported names are visible unqualified).
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table == nullptr) continue;
+        auto it = imp.m_table->m_functions.find(joined);
+        if (it == imp.m_table->m_functions.end()) continue;
+        for (FunctionDeclNode* fn : it->second) {
+            if (imp.admits(joined, fn)) return fn;
+        }
+    }
+    if (path.size() >= 3) {
+        // `alias::ns::f`: the first segment names an import, the rest is qualified inside it.
+        return find_function_in_import(path[0], join_path(path, 1));
+    }
+    return nullptr;
+}
+
+VarDeclNode* SymbolTablePass0::find_namespace_global(const std::vector<SymbolID>& path, SymbolID current) const {
+    if (path.size() < 2) return nullptr;
+    auto in_table = [](const SymbolTablePass0& table, SymbolID key, const ImportedModule* view) -> VarDeclNode* {
+        auto it = table.m_globals.find(key);
+        if (it == table.m_globals.end()) return nullptr;
+        return view == nullptr || view->admits(key, it->second) ? it->second : nullptr;
+    };
+    const SymbolID joined = join_path(path, 0);
+    for (SymbolID ns = current; ; ns = parent_namespace(ns)) {
+        if (VarDeclNode* local = in_table(*this, qualify(ns, joined), nullptr)) return local;
+        if (ns == INVALID_SYMBOL_ID) break;
+    }
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table == nullptr) continue;
+        if (VarDeclNode* found = in_table(*imp.m_table, joined, &imp)) return found;
+    }
+    const std::string_view alias_text = text_of(path[0]);
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table == nullptr || !alias_matches(imp, alias_text)) continue;
+        if (VarDeclNode* found = in_table(*imp.m_table, join_path(path, 1), &imp)) return found;
+    }
+    return nullptr;
+}
+
+bool SymbolTablePass0::is_namespace_from(SymbolID current, SymbolID first) const {
+    for (SymbolID ns = current; ; ns = parent_namespace(ns)) {
+        if (is_namespace(qualify(ns, first))) return true;
+        if (ns == INVALID_SYMBOL_ID) break;
+    }
+    return false;
+}
+
+FunctionDeclNode* SymbolTablePass0::find_function_from(SymbolID current_namespace, SymbolID name) const {
+    for (SymbolID ns = current_namespace; ns != INVALID_SYMBOL_ID; ns = parent_namespace(ns)) {
+        auto it = m_functions.find(qualify(ns, name));
+        if (it != m_functions.end() && !it->second.empty()) return it->second.front();
+    }
+    return find_function(name);
+}
+
+VarDeclNode* SymbolTablePass0::find_global_from(SymbolID current_namespace, SymbolID name) const {
+    for (SymbolID ns = current_namespace; ns != INVALID_SYMBOL_ID; ns = parent_namespace(ns)) {
+        auto it = m_globals.find(qualify(ns, name));
+        if (it != m_globals.end()) return it->second;
+    }
+    return find_global(name);
+}
+
+bool SymbolTablePass0::is_public(const DeclNode* decl) const {
+    if (decl == nullptr || decl->m_is_pub) return true;
+    auto twin = [&](const SymbolTablePass0& table) {
+        if (const auto* fn = dynamic_cast<const FunctionDeclNode*>(decl)) {
+            // Only functions registered in the table have twins: a method written inside a class body stands alone.
+            const SymbolID key = fn->m_owner != INVALID_SYMBOL_ID ? fn->m_name : qualify(fn->m_namespace, fn->m_name);
+            const auto& group = fn->m_owner != INVALID_SYMBOL_ID ? table.m_methods : table.m_functions;
+            const auto found = group.find(fn->m_owner != INVALID_SYMBOL_ID ? fn->m_owner : key);
+            if (found == group.end() || std::find(found->second.begin(), found->second.end(), fn) == found->second.end()) return false;
+            return table.m_pub_functions.count({fn->m_owner, key}) != 0;
+        }
+        if (const auto* var = dynamic_cast<const VarDeclNode*>(decl)) return table.m_pub_globals.count(qualify(var->m_namespace, var->m_name)) != 0;
+        return false;
+    };
+    if (twin(*this)) return true;
+    for (const ImportedModule& imp : m_views) {
+        if (imp.m_table != nullptr && twin(*imp.m_table)) return true;
+    }
+    return false;
+}
+
+bool SymbolTablePass0::is_accessible(const DeclNode* decl, std::string_view viewing_file) const {
+    if (decl == nullptr || decl->m_file.empty() || viewing_file.empty()) return true;
+    if (is_public(decl)) return true;
+    return unit_key(decl->m_file) == unit_key(viewing_file);
 }
 
 } // namespace fool

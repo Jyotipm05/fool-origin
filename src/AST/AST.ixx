@@ -476,6 +476,8 @@ public:
     std::vector<AttributeNode> m_attributes;
     bool m_is_active{true};                 ///< Cleared during Pass 0 if @target / @if prunes it
     SymbolID m_module{INVALID_SYMBOL_ID};   ///< 'module' section this declaration appeared in
+    bool m_is_pub{false};                   ///< written `pub`, or inside a `pub namespace`: visible outside its file unit
+    SymbolID m_namespace{INVALID_SYMBOL_ID};///< qualified name (`a::b`) of the enclosing `namespace`, INVALID at the top level
     std::string_view m_file;                ///< Interned path of the defining file (set by the driver / module graph)
 
     // 2. Constructors
@@ -525,14 +527,34 @@ struct ImportArg {
     ImportArg(SymbolID name, ExprNode* val) : m_name(name), m_value(val) {}
 };
 
+/// Where an import path starts.
+enum class ImportRoot : uint8_t {
+    Relative,   ///< `a:b`        next to the importing file
+    Std,        ///< `@std:a`     the standard library
+    Src,        ///< `@src:a`     the `src` folder of the project
+    Lib,        ///< `@lib:a`     the `lib` folder of the library or package
+    Sup,        ///< `@sup:a`     the folder above the importing file's (repeat for more)
+    Pack,       ///< `@pack:name:a` an installed package
+    Drive       ///< `:c:a`       a drive path
+};
+
 /**
  * @class ImportDeclNode
- * @brief Module import directive (#import std::core; or #import math::matrix<Rows = 4>;)
+ * @brief Import directive: `#import @std:core;`, `#import {a, b} from @src:net:http<TLS = 1>;`, `pub #import ...;`.
+ * @details The path names a file (`a:b` is `a/b` with any of `.fo`, `.fl`, `.fex`) or, when no such file exists, a folder.
+ *          `m_module_path` holds the path as written (for messages); the structured form is in the other members.
  */
 class ImportDeclNode : public DeclNode {
 public:
     // 1. Member variables
-    SymbolID m_module_path{INVALID_SYMBOL_ID};
+    SymbolID m_module_path{INVALID_SYMBOL_ID};   ///< the path as written, e.g. `@std:core`
+    ImportRoot m_root{ImportRoot::Relative};
+    uint32_t m_up{0};                            ///< Sup: how many folders up
+    SymbolID m_pack{INVALID_SYMBOL_ID};          ///< Pack: the package name
+    SymbolID m_drive{INVALID_SYMBOL_ID};         ///< Drive: the drive letter
+    std::vector<SymbolID> m_segments;            ///< the folders and file after the root
+    bool m_selective{false};                     ///< `{a, b} from path`
+    std::vector<SymbolID> m_names;               ///< the names in braces
     std::vector<ImportArg> m_template_args;
 
     // 2. Constructors
@@ -566,6 +588,7 @@ struct ParameterDecl {
     TypeNode* m_type{nullptr};
     ExprNode* m_default_value{nullptr}; ///< Supports middle and trailing defaults
     SourceSpan m_span;
+    bool m_is_pub{false};               ///< class / struct fields: written `pub`
 
     // 2. Constructors
     ParameterDecl() = default;
@@ -649,6 +672,21 @@ public:
 
     // 2. Constructors
     ClassDeclNode() = default;
+};
+
+/**
+ * @class NamespaceDeclNode
+ * @brief `namespace name { functions, constants, nested namespaces }`; `pub namespace` makes every member public.
+ * @details Members carry the qualified namespace in DeclNode::m_namespace and are registered under `name::member`.
+ */
+class NamespaceDeclNode : public DeclNode {
+public:
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    std::vector<DeclNode*> m_declarations;
+
+    // 2. Constructors
+    NamespaceDeclNode() = default;
 };
 
 class BlueprintDeclNode : public DeclNode {

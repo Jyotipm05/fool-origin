@@ -1,0 +1,16 @@
+module vis::user;
+
+#import lib;
+
+fn misuse() -> i32 {
+    var b: Box = make_box();
+    var total: i32 = b.open + b.show();
+    total = total + b.closed;
+    total = total + b.peek();
+    total = total + internal_helper();
+    total = total + HIDDEN_CONST;
+    total = total + closed_ns::g();
+    total = total + open_ns::f() + VISIBLE;
+    var h: Hidden = Hidden { value: 1 };
+    return total + h.value;
+}

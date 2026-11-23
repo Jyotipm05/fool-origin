@@ -1,0 +1,30 @@
+module tests::hir_namespaces;
+
+// Namespace functions and constants are lowered under their qualified names.
+namespace math {
+    constx LIMIT: i32 = 5;
+
+    fn square(x: i32) -> i32 {
+        return x * x;
+    }
+
+    fn clamp(x: i32) -> i32 {
+        if (x > LIMIT) {
+            return LIMIT;
+        }
+        return square(x);
+    }
+
+    namespace deep {
+        fn twice(x: i32) -> i32 {
+            return math::square(x) + square(x);
+        }
+    }
+}
+
+var total: i32 = 0;
+
+fn run(a: i32) -> i32 {
+    total = math::clamp(a) + math::deep::twice(a) + math::LIMIT;
+    return total;
+}

@@ -1,0 +1,9 @@
+module imp_names::main;
+
+#import {nothing} from math;
+#import {hidden} from math;
+#import {add} from math;
+
+fn run() -> i32 {
+    return add(1, 2) + mul(3, 4);
+}

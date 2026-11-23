@@ -1,0 +1,6 @@
+module vis::store;
+
+// A platform overlay belongs to the privacy unit of `store`: it may call the private `helper`.
+pub fn linux_value() -> i32 {
+    return helper() + SECRET;
+}

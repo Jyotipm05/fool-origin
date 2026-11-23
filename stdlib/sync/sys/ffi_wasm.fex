@@ -1,5 +1,5 @@
 module std::sync::ffi;
-#import std::core;
+#import @std:core;
 
 @target(arch = "wasm32")
 @extern("llvm", link_name = "llvm.wasm.memory.atomic.wait32")

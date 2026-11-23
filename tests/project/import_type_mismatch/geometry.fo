@@ -1,13 +1,13 @@
 // An interface with no matching .fl: valid, the implementation may live elsewhere (or in a library).
 module tests::geometry;
 
-constx UNIT: i32 = 1;
+pub constx UNIT: i32 = 1;
 
-class Vec2 {
-    x: i32;
-    y: i32;
+pub class Vec2 {
+    pub x: i32;
+    pub y: i32;
 
-    fn length_squared(this const& self) -> i32;
+    pub fn length_squared(this const& self) -> i32;
 }
 
-fn dot(a: const& Vec2, b: const& Vec2, scale: i32 = 1) -> i32;
+pub fn dot(a: const& Vec2, b: const& Vec2, scale: i32 = 1) -> i32;

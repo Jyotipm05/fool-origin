@@ -1,8 +1,8 @@
 module std::async;
 
-class EventLoop {
-    loop_fd: i32;
+pub class EventLoop {
+    pub loop_fd: i32;
 
-    fn init() -> EventLoop;
-    fn poll_events(this &self, timeout_ms: i32);
+    pub fn init() -> EventLoop;
+    pub fn poll_events(this &self, timeout_ms: i32);
 }

@@ -1,0 +1,12 @@
+module imp::main;
+
+#import @src:util:prelude;                  // from the src folder; brings in what prelude re-exports
+#import {now} from @lib:shared:clock;       // only `now` from the lib folder
+#import helpers:local;                      // next to this file
+#import @sup:util:text;                     // one folder up, then util/text
+#import @std:core;                          // the standard library (loaded on demand when it is not indexed)
+
+fn run() -> i32 {
+    // add and mul come through prelude (re-exported from math), shout from the selection, now from the lib import
+    return add(1, 2) + mul(3, 4) + shout() + now() + local_fn() + whisper() + math::add(1, 1) + clock::now();
+}

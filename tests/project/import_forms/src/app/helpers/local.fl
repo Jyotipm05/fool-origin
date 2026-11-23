@@ -1,0 +1,3 @@
+module imp::local;
+
+pub fn local_fn() -> i32 { return 5; }

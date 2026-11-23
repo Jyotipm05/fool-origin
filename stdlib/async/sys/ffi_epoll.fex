@@ -2,7 +2,7 @@ module std::async::epoll_ffi;
 
 @target(os = "linux")
 @extern("C", link_name = "epoll_create1")
-fn epoll_create1(flags: i32) -> i32;
+pub fn epoll_create1(flags: i32) -> i32;
 
 @target(os = "linux")
 @extern("C", link_name = "epoll_ctl")

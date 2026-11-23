@@ -1,13 +1,13 @@
 module std::core;
 
-class Span<T> {
-    ptr: *T;
-    length: usize;
+pub class Span<T> {
+    pub ptr: *T;
+    pub length: usize;
 
-    fn from_parts(data: *T, count: usize) -> Span<T>;
-    fn len(this const& self) -> usize;
-    fn is_empty(this const& self) -> bool;
-    fn get(this const& self, index: usize) -> const& T;
-    fn get_mut(this &self, index: usize) -> &T;
-    fn slice(this const& self, start: usize, end: usize) -> Span<T>;
+    pub fn from_parts(data: *T, count: usize) -> Span<T>;
+    pub fn len(this const& self) -> usize;
+    pub fn is_empty(this const& self) -> bool;
+    pub fn get(this const& self, index: usize) -> const& T;
+    pub fn get_mut(this &self, index: usize) -> &T;
+    pub fn slice(this const& self, start: usize, end: usize) -> Span<T>;
 }

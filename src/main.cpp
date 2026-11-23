@@ -47,6 +47,7 @@ struct Options {
     fool::TargetConfig m_target;
     std::vector<fs::path> m_files;
     std::vector<fs::path> m_roots;
+    fs::path m_std_root{"stdlib"};
     bool m_project{false};
     bool m_graph{false};
     bool m_quiet{false};
@@ -151,6 +152,7 @@ void print_usage() {
         "  --target <os>-<arch>   target platform (default: linux-x86_64)\n"
         "  --project              check every module below the search roots as a unit\n"
         "  -I <dir>               add a module search root (project mode)\n"
+        "  --std-root <dir>       where '@std:' imports look (default: stdlib)\n"
         "  --graph                print the module compilation order (project mode)\n"
         "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
         "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
@@ -344,8 +346,8 @@ int run_file_mode(const Options& options) {
 /// Builds the symbol table of one module (all of its files, filtered to the module's own section)
 /// and runs the type checker over it with strict name resolution.
 std::unique_ptr<fool::SymbolTablePass0>
-check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrides, const fool::TargetConfig& target,
-                   fool::DiagnosticEngine& diag, const Options& options,
+check_module_group(const fool::ModuleGraphPass1& graph, const fool::ModuleNode& node, const fool::ConstTable& overrides,
+                   const fool::TargetConfig& target, fool::DiagnosticEngine& diag, const Options& options,
                    const std::unordered_map<fool::SymbolID, const fool::SymbolTablePass0*>& built) {
     auto table = std::make_unique<fool::SymbolTablePass0>(target, diag);
     table->define_parameters(node.m_parameters, overrides);
@@ -353,9 +355,14 @@ check_module_group(const fool::ModuleNode& node, const fool::ConstTable& overrid
         table->collect_declarations(file.m_ast, node.m_name);
     }
     for (fool::ImportDeclNode* imp : table->import_declarations()) {
-        auto it = built.find(imp->m_module_path);
-        table->add_import(imp, it != built.end() ? it->second : nullptr);
+        const fool::ResolvedImport* resolved = graph.resolved_import(imp);
+        if (resolved == nullptr) continue;   // did not resolve: the graph already reported it
+        for (const fool::ResolvedImportTarget& target_module : resolved->m_targets) {
+            auto it = built.find(target_module.m_module);
+            table->add_import(imp, target_module.m_module, it != built.end() ? it->second : nullptr, target_module.m_units);
+        }
     }
+    table->check_selective_imports();
     fool::TypeCheckerPass2 checker(*table, diag);
     checker.set_strict_names(true);
     checker.set_warn_shadow(options.m_warn_shadow);
@@ -389,6 +396,7 @@ int run_project_mode(const Options& options) {
     fool::ModuleGraphPass1 graph(arena, diag, options.m_target);
     for (const fs::path& root : options.m_roots) graph.add_search_path(root);
     graph.set_cache(options.m_cache.get());
+    graph.set_std_root(options.m_std_root);
 
     graph.index_search_paths();
     bool graph_ok = !diag.has_errors();
@@ -417,7 +425,7 @@ int run_project_mode(const Options& options) {
     size_t instantiations = 0;
     for (fool::SymbolID id : graph.get_compilation_order()) {
         const fool::ModuleNode* node = graph.get_module(id);
-        owned.push_back(check_module_group(*node, {}, options.m_target, diag, options, built));
+        owned.push_back(check_module_group(graph, *node, {}, options.m_target, diag, options, built));
         built[id] = owned.back().get();
 
         // Each distinct set of import template arguments is checked as its own instantiation, so
@@ -425,7 +433,7 @@ int run_project_mode(const Options& options) {
         for (const fool::ModuleInstantiation& inst : node->m_instantiations) {
             ++instantiations;
             size_t before = diag.error_count();
-            check_module_group(*node, inst.m_overrides, options.m_target, diag, options, built);
+            check_module_group(graph, *node, inst.m_overrides, options.m_target, diag, options, built);
             if (diag.error_count() != before) std::cerr << "note: errors above occurred in instantiation '" << inst.m_key << "'\n";
         }
     }
@@ -455,6 +463,8 @@ int main(const int argc, char** argv) {
             }
         } else if (arg == "-I" && i + 1 < argc) {
             options.m_roots.emplace_back(argv[++i]);
+        } else if (arg == "--std-root" && i + 1 < argc) {
+            options.m_std_root = argv[++i];
         } else if (arg == "--project") {
             options.m_project = true;
         } else if (arg == "--dump-calls") {

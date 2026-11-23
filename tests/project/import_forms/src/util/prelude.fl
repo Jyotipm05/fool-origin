@@ -1,0 +1,5 @@
+module imp::prelude;
+
+// `pub #import` re-exports: whoever imports prelude also gets everything from math, and only `shout` from text.
+pub #import math;
+pub #import {shout} from text;

@@ -168,6 +168,24 @@ public:
     }
 
 private:
+    // ---- namespaces ----------------------------------------------------------------------------
+
+    /// The namespace of the function being lowered (an instance uses its template's).
+    [[nodiscard]] SymbolID current_namespace() const {
+        return m_fn != nullptr && m_fn->m_decl != nullptr ? m_fn->m_decl->m_namespace : INVALID_SYMBOL_ID;
+    }
+
+    /// `name` for a top-level function, `ns::name` for one declared in a namespace.
+    [[nodiscard]] static std::string namespaced(SymbolID ns, SymbolID name) {
+        return ns == INVALID_SYMBOL_ID ? name_of(name) : name_of(ns) + "::" + name_of(name);
+    }
+
+    /// The name a global is known by in the program: namespace-qualified.
+    [[nodiscard]] static SymbolID global_key(const VarDeclNode* var) {
+        if (var->m_namespace == INVALID_SYMBOL_ID) return var->m_name;
+        return StringInterner::get().intern(namespaced(var->m_namespace, var->m_name));
+    }
+
     // ---- types ---------------------------------------------------------------------------------
 
     [[nodiscard]] TypeId intern(Type type) { return m_module.m_types.intern(std::move(type)); }
@@ -467,7 +485,7 @@ private:
         for (const DeclNode* decl : m_pass0.active_declarations()) {
             const auto* fn = dynamic_cast<const FunctionDeclNode*>(decl);
             if (fn != nullptr && fn->m_has_body && fn->m_name == declaration->m_name && fn->m_params.size() == declaration->m_params.size() &&
-                fn->m_owner == owner_name) {
+                fn->m_owner == owner_name && fn->m_namespace == declaration->m_namespace) {
                 return fn;
             }
         }
@@ -662,6 +680,8 @@ private:
                 name += ">";
             }
             name += "::";
+        } else {
+            name = decl->m_namespace == INVALID_SYMBOL_ID ? std::string() : name_of(decl->m_namespace) + "::";
         }
         name += name_of(decl->m_name);
         if (!decl->m_type_params.empty()) {
@@ -681,7 +701,7 @@ private:
         Function fn;
         const SymbolID owner_name = decl->m_owner != INVALID_SYMBOL_ID ? decl->m_owner : (owner != nullptr ? owner->m_name : INVALID_SYMBOL_ID);
         fn.m_name = instantiation != nullptr ? instantiation->m_name
-                                             : (owner_name != INVALID_SYMBOL_ID ? name_of(owner_name) + "::" : std::string()) + name_of(decl->m_name);
+                                             : (owner_name != INVALID_SYMBOL_ID ? name_of(owner_name) + "::" : (decl->m_namespace == INVALID_SYMBOL_ID ? std::string() : name_of(decl->m_namespace) + "::")) + name_of(decl->m_name);
         fn.m_decl = decl;
         fn.m_reason_span = decl->m_span;
         m_module.m_functions.push_back(std::move(fn));
@@ -891,7 +911,7 @@ private:
         // `x = value;` with no `x` in scope declares it: a mutable local of the value's type.
         if (const auto* assign = dynamic_cast<const BinaryExpr*>(expr_stmt->m_expr); assign != nullptr && assign->m_op == TokenKind::Equal) {
             if (const auto* id = dynamic_cast<const IdentifierExpr*>(assign->m_lhs);
-                id != nullptr && !find_local(id->m_identifier) && m_pass0.find_global(id->m_identifier) == nullptr) {
+                id != nullptr && !find_local(id->m_identifier) && m_pass0.find_global_from(current_namespace(), id->m_identifier) == nullptr) {
                 out.push_back(lower_inferred_let(id->m_identifier, assign->m_rhs, true, expr_stmt->m_span));
                 return;
             }
@@ -969,7 +989,13 @@ private:
         if (const auto* path = dynamic_cast<const PathExpr*>(e)) {
             size_t index = 0;
             if (const EnumDeclNode* en = variant_path(path, index)) return lower_enum_value(en, index, {}, e->m_span);
-            fail("qualified paths other than enum variants (not lowerable yet)", e->m_span);
+            if (const VarDeclNode* global = m_pass0.find_namespace_global({path->m_segments.begin(), path->m_segments.end()}, current_namespace())) {
+                if (global->m_type == nullptr) fail("global '" + name_of(global->m_name) + "' has no declared type", e->m_span);
+                ExprPtr out = node(ExprKind::Global, lower_type(global->m_type), e->m_span);
+                out->m_name = global_key(global);
+                return out;
+            }
+            fail("qualified paths other than enum variants and namespace constants (not lowerable yet)", e->m_span);
         }
         fail("unsupported expression", e->m_span);
     }
@@ -980,13 +1006,13 @@ private:
             out->m_local = *local;
             return out;
         }
-        if (const VarDeclNode* global = m_pass0.find_global(id->m_identifier)) {
+        if (const VarDeclNode* global = m_pass0.find_global_from(current_namespace(), id->m_identifier)) {
             if (global->m_type == nullptr) fail("global '" + name_of(id->m_identifier) + "' has no declared type", id->m_span);
             ExprPtr out = node(ExprKind::Global, lower_type(global->m_type), id->m_span);
-            out->m_name = id->m_identifier;
+            out->m_name = global_key(global);
             return out;
         }
-        if (m_pass0.find_function(id->m_identifier) != nullptr) fail("function '" + name_of(id->m_identifier) + "' used as a value (function values are not lowerable yet)", id->m_span);
+        if (m_pass0.find_function_from(current_namespace(), id->m_identifier) != nullptr) fail("function '" + name_of(id->m_identifier) + "' used as a value (function values are not lowerable yet)", id->m_span);
         fail("unresolved name '" + name_of(id->m_identifier) + "'", id->m_span);
     }
 
@@ -1100,7 +1126,7 @@ private:
 
     [[nodiscard]] ExprPtr lower_assignment(const BinaryExpr* assign) {
         if (const auto* id = dynamic_cast<const IdentifierExpr*>(assign->m_lhs);
-            id != nullptr && !find_local(id->m_identifier) && m_pass0.find_global(id->m_identifier) == nullptr) {
+            id != nullptr && !find_local(id->m_identifier) && m_pass0.find_global_from(current_namespace(), id->m_identifier) == nullptr) {
             fail("declaration '" + name_of(id->m_identifier) + " = ...' used as a value", assign->m_span);
         }
         ExprPtr place = lower_place(assign->m_lhs);
@@ -1277,6 +1303,8 @@ private:
                     display = name_of(owner->m_name);
                 }
                 display += "::";
+            } else if (callee->m_namespace != INVALID_SYMBOL_ID) {
+                display = name_of(callee->m_namespace) + "::";
             }
             display += name_of(callee->m_name);
             if (generic_fn) {

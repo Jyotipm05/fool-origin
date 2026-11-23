@@ -5,10 +5,10 @@
 
 module examples::basics;
 
-constx BUFFER_CAPACITY: usize = 4096;
-constx MAX_WORKERS: i32 = 8;
-constx PI: f64 = 3.1415926535;
+pub constx BUFFER_CAPACITY: usize = 4096;
+pub constx MAX_WORKERS: i32 = 8;
+pub constx PI: f64 = 3.1415926535;
 
-fn calculate_area(radius: f64) -> f64;
-fn entry() -> i32;
+pub fn calculate_area(radius: f64) -> f64;
+pub fn entry() -> i32;
 

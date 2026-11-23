@@ -1,18 +1,18 @@
 module std::io;
-#import std::core;
+#import @std:core;
 
-enum FileMode {
+pub enum FileMode {
     Read,
     Write,
     Append,
 }
 
-class File {
-    handle: i64;
-    is_open: bool;
+pub class File {
+    pub handle: i64;
+    pub is_open: bool;
 
-    fn open(path: StringView, mode: FileMode = FileMode::Read) -> File;
-    fn read(this &self, buffer: &Span<u8>) -> isize;
-    fn write(this &self, data: const& Span<u8>) -> isize;
-    fn close(this &self);
+    pub fn open(path: StringView, mode: FileMode = FileMode::Read) -> File;
+    pub fn read(this &self, buffer: &Span<u8>) -> isize;
+    pub fn write(this &self, data: const& Span<u8>) -> isize;
+    pub fn close(this &self);
 }

@@ -1,0 +1,8 @@
+module tests::namespace_types;
+
+namespace bad {
+    // expect-error: only functions, constants and nested namespaces
+    class Inside {
+        x: i32;
+    }
+}

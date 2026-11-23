@@ -10,9 +10,9 @@
   "Module Import": {
     "prefix": "import",
     "body": [
-      "#import ${1:std}::${2:core};"
+      "#import @${1:std}:${2:core};"
     ],
-    "description": "Import a Fool module with #import"
+    "description": "Import files by path with #import"
   },
   "Module Import Template": {
     "prefix": "import_template",

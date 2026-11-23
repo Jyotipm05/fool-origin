@@ -1,0 +1,16 @@
+module std::core::intrinsics;
+
+@extern("llvm", link_name = "llvm.atomic.load")
+pub fn atomic_load(ptr: const* void, order: i32) -> usize;
+
+@extern("llvm", link_name = "llvm.atomic.store")
+pub fn atomic_store(ptr: *void, val: usize, order: i32);
+
+@extern("llvm", link_name = "llvm.atomic.cmp.xchg")
+pub fn atomic_cas(ptr: *void, expected: usize, desired: usize, order: i32) -> bool;
+
+@extern("llvm", link_name = "llvm.atomic.rmw.add")
+pub fn atomic_fetch_add(ptr: *void, val: usize, order: i32) -> usize;
+
+@extern("llvm", link_name = "llvm.atomic.rmw.xchg")
+pub fn atomic_swap(ptr: *void, desired: usize, order: i32) -> usize;

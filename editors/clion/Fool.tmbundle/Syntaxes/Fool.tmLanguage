@@ -220,13 +220,13 @@
 				</dict>
 				<dict>
 					<key>match</key>
-					<string>\b(module|ruleset|blueprint|class|enum)\b</string>
+					<string>\b(module|namespace|ruleset|blueprint|class|enum)\b</string>
 					<key>name</key>
 					<string>storage.type.declaration.fool</string>
 				</dict>
 				<dict>
 					<key>match</key>
-					<string>\b(fn|async|await)\b</string>
+					<string>\b(fn|async|await|pub)\b</string>
 					<key>name</key>
 					<string>keyword.declaration.function.fool</string>
 				</dict>

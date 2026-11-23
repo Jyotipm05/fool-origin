@@ -1,5 +1,5 @@
 module std::sync;
-#import std::sync::ffi;
+#import @std:sync:sys:ffi;
 
 fn Mutex<T>::create(value: T) -> Mutex<T> {
     return Mutex<T> {

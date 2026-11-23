@@ -1,13 +1,13 @@
 module std::async;
 
-class TaskHandle {
-    id: u64;
-    completed: bool;
+pub class TaskHandle {
+    pub id: u64;
+    pub completed: bool;
 
-    fn cancel(this &self);
+    pub fn cancel(this &self);
 }
 
-class TaskScheduler {
-    fn spawn(task_id: u64);
-    fn run_ready();
+pub class TaskScheduler {
+    pub fn spawn(task_id: u64);
+    pub fn run_ready();
 }

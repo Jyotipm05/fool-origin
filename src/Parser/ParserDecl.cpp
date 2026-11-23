@@ -153,14 +153,90 @@ void Parser::parse_module_header() {
     m_current_module->m_module_sections.push_back(name);
 }
 
+std::string Parser::parse_import_path(ImportDeclNode& imp) {
+    std::string spelling;
+    auto bad = [&](const std::string& message) {
+        error_here(message);
+        return std::string();
+    };
+    if (check(TokenKind::At)) {
+        // `@std:` `@src:` `@lib:` `@sup:` (may repeat) `@pack:name:`
+        while (check(TokenKind::At)) {
+            advance();
+            if (!is_name_token(current())) return bad("Expected an import root after '@' (std, src, lib, sup or pack)");
+            const std::string root(advance().m_raw_lexeme);
+            if (root == "std") imp.m_root = ImportRoot::Std;
+            else if (root == "src") imp.m_root = ImportRoot::Src;
+            else if (root == "lib") imp.m_root = ImportRoot::Lib;
+            else if (root == "sup") imp.m_root = ImportRoot::Sup;
+            else if (root == "pack") imp.m_root = ImportRoot::Pack;
+            else return bad("unknown import root '@" + root + "' (expected @std, @src, @lib, @sup or @pack)");
+            if (check(TokenKind::DoubleColon)) return bad("write import paths with single ':' separators, e.g. '@" + root + ":name'");
+            if (!match(TokenKind::Colon)) return bad("Expected ':' after '@" + root + "'");
+            spelling += "@" + root + ":";
+            if (imp.m_root == ImportRoot::Sup) { ++imp.m_up; continue; }
+            if (imp.m_root == ImportRoot::Pack) {
+                if (!is_name_token(current())) return bad("Expected a package name after '@pack:'");
+                imp.m_pack = StringInterner::get().intern(std::string(advance().m_raw_lexeme));
+                spelling += std::string(StringInterner::get().resolve(imp.m_pack));
+                if (!match(TokenKind::Colon)) return spelling; // the package's root
+                spelling += ":";
+            }
+            break;
+        }
+    } else if (check(TokenKind::Colon)) {
+        // `:c:users:me` a drive path
+        advance();
+        if (!is_name_token(current()) || current().m_raw_lexeme.size() != 1) return bad("Expected a drive letter in ':c:path'");
+        imp.m_root = ImportRoot::Drive;
+        imp.m_drive = StringInterner::get().intern(std::string(advance().m_raw_lexeme));
+        if (!match(TokenKind::Colon)) return bad("Expected ':' after the drive letter");
+        spelling += ":" + std::string(StringInterner::get().resolve(imp.m_drive)) + ":";
+    }
+    if (!is_name_token(current())) return bad("Expected a path after '#import', found '" + describe(current()) + "'");
+    while (true) {
+        const std::string segment(advance().m_raw_lexeme);
+        imp.m_segments.push_back(StringInterner::get().intern(segment));
+        spelling += segment;
+        if (check(TokenKind::DoubleColon)) return bad("write import paths with single ':' separators, e.g. '@std:core', not '::'");
+        if (check(TokenKind::Colon) && is_name_token(peek())) {
+            advance();
+            spelling += ":";
+            continue;
+        }
+        break;
+    }
+    return spelling;
+}
+
 ImportDeclNode* Parser::parse_import() {
     advance(); // '#import'
-    std::string path = parse_module_path();
+    auto* import_decl = m_arena.create<ImportDeclNode>();
+    if (match(TokenKind::OpenBrace)) {
+        // `{a, b} from path`
+        import_decl->m_selective = true;
+        while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+            if (!is_name_token(current())) {
+                error_here("Expected a name to import, found '" + describe(current()) + "'");
+                break;
+            }
+            import_decl->m_names.push_back(StringInterner::get().intern(std::string(advance().m_raw_lexeme)));
+            if (!match(TokenKind::Comma)) break;
+        }
+        consume(TokenKind::CloseBrace, "Expected '}' after the imported names");
+        if (import_decl->m_names.empty()) error_here("'#import { }' names nothing to import");
+        if (check(TokenKind::Identifier) && current().m_raw_lexeme == "from") {
+            advance();
+        } else {
+            error_here("Expected 'from' after the imported names");
+        }
+    }
+    const std::string path = parse_import_path(*import_decl);
     if (path.empty()) {
         synchronize_declaration();
         return nullptr;
     }
-    auto* import_decl = m_arena.create<ImportDeclNode>(StringInterner::get().intern(path));
+    import_decl->m_module_path = StringInterner::get().intern(path);
 
     if (match(TokenKind::Less)) {
         while (!check(TokenKind::Greater) && !is_at_end()) {
@@ -251,10 +327,21 @@ DeclNode* Parser::parse_declaration() {
         attrs.push_back(parse_attribute());
     }
 
+    bool is_pub = false;
+    if (check(TokenKind::KwPub)) {
+        is_pub = true;
+        advance();
+        if (check(TokenKind::KwModule)) error_here("'pub' cannot be applied to 'module'");
+    }
+
     DeclNode* decl = nullptr;
     switch (current().m_kind) {
         case TokenKind::HashImport:
             decl = parse_import();
+            break;
+        case TokenKind::KwNamespace:
+            advance();
+            decl = parse_namespace(is_pub);
             break;
         case TokenKind::KwFn:
             advance();
@@ -318,8 +405,44 @@ DeclNode* Parser::parse_declaration() {
         decl->m_attributes = std::move(attrs);
         decl->m_module = m_current_section;
         decl->m_span = span_from(start);
+        decl->m_is_pub = is_pub || m_namespace_pub;   // a member of a `pub namespace` is public
+        decl->m_namespace = m_current_namespace;
     }
     return decl;
+}
+
+/// `namespace name { fn ...; constx ...; namespace inner { ... } }`; the keyword is already consumed. Members are
+/// functions, constants and nested namespaces: they carry the qualified namespace and are public when this namespace
+/// (or an enclosing one) is `pub`.
+NamespaceDeclNode* Parser::parse_namespace(bool is_pub) {
+    auto* ns = m_arena.create<NamespaceDeclNode>();
+    Token name = consume(TokenKind::Identifier, "Expected namespace name");
+    ns->m_name = name.m_symbol_id;
+    consume(TokenKind::OpenBrace, "Expected '{' after namespace name");
+
+    const SymbolID outer_namespace = m_current_namespace;
+    const bool outer_pub = m_namespace_pub;
+    const std::string outer_text = outer_namespace == INVALID_SYMBOL_ID ? std::string() : std::string(StringInterner::get().resolve(outer_namespace)) + "::";
+    m_current_namespace = StringInterner::get().intern(outer_text + std::string(StringInterner::get().resolve(ns->m_name)));
+    m_namespace_pub = outer_pub || is_pub;
+
+    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+        size_t before = m_cursor;
+        if (DeclNode* inner = parse_declaration()) {
+            const bool allowed = dynamic_cast<FunctionDeclNode*>(inner) != nullptr || dynamic_cast<VarDeclNode*>(inner) != nullptr ||
+                                 dynamic_cast<NamespaceDeclNode*>(inner) != nullptr || dynamic_cast<ConditionalDeclBlock*>(inner) != nullptr;
+            if (!allowed) {
+                error(inner->m_span, "only functions, constants and nested namespaces can be declared inside a namespace (types cannot yet)");
+            } else {
+                ns->m_declarations.push_back(inner);
+            }
+        }
+        if (m_cursor == before) advance();
+    }
+    consume(TokenKind::CloseBrace, "Expected '}' to close namespace");
+    m_current_namespace = outer_namespace;
+    m_namespace_pub = outer_pub;
+    return ns;
 }
 
 /// `@if cond decl`  |  `@if cond { decls } [@elif cond { decls }]... [@else { decls }]`
@@ -534,15 +657,18 @@ ClassDeclNode* Parser::parse_class(bool is_struct) {
         std::vector<AttributeNode> attrs;
         while (check(TokenKind::At) || check(TokenKind::Dollar)) attrs.push_back(parse_attribute());
 
+        const bool is_pub = match(TokenKind::KwPub);   // members are private to the file unit unless written `pub`
         bool is_async = check(TokenKind::KwAsync);
         if (is_async) advance();
         if (match(TokenKind::KwFn)) {
             if (FunctionDeclNode* fn = parse_function(is_async)) {
                 fn->m_attributes = std::move(attrs);
+                fn->m_is_pub = is_pub;
                 cls->m_methods.push_back(fn);
             }
         } else if (check(TokenKind::Identifier) && peek().m_kind == TokenKind::Colon) {
             ParameterDecl field;
+            field.m_is_pub = is_pub;
             field.m_span.m_start = current().m_span.m_start;
             field.m_name = advance().m_symbol_id;
             advance(); // ':'

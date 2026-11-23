@@ -1,0 +1,43 @@
+fn math::square(x: i32) -> i32 {
+  let _1: i32;
+  bb0:
+    _1 = x#0 * x#0
+    return _1
+}
+
+fn math::clamp(x: i32) -> i32 {
+  let _1: bool;
+  let _2: i32;
+  bb0:
+    _1 = x#0 > ::math::LIMIT
+    branch _1, bb1, bb2
+  bb1:
+    return ::math::LIMIT
+  bb2:
+    _2 = call math::square(x#0)
+    return _2
+}
+
+fn math::deep::twice(x: i32) -> i32 {
+  let _1: i32;
+  let _2: i32;
+  let _3: i32;
+  bb0:
+    _1 = call math::square(x#0)
+    _2 = call math::square(x#0)
+    _3 = _1 + _2
+    return _3
+}
+
+fn run(a: i32) -> i32 {
+  let _1: i32;
+  let _2: i32;
+  let _3: i32;
+  bb0:
+    _1 = call math::clamp(a#0)
+    _2 = call math::deep::twice(a#0)
+    _3 = _1 + _2
+    ::total = _3 + ::math::LIMIT
+    return ::total
+}
+// 4 of 4 function(s) lowered

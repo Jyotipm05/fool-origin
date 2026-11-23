@@ -120,13 +120,16 @@ class ConstEvaluator {
     const ConstTable& m_table;
     DiagnosticEngine& m_diag;
     unsigned m_pointer_width{64}; ///< Width of usize/isize on the target, for constant casts
+    SymbolID m_namespace{INVALID_SYMBOL_ID}; ///< Qualified namespace the expression sits in: bare names try its constants first
 
 public:
     // 2. Constructors and Destructors in the MIDDLE
-    ConstEvaluator(const ConstTable& table, DiagnosticEngine& diag, unsigned pointer_width = 64)
-        : m_table(table), m_diag(diag), m_pointer_width(pointer_width) {}
+    ConstEvaluator(const ConstTable& table, DiagnosticEngine& diag, unsigned pointer_width = 64,
+                   SymbolID qualified_namespace = INVALID_SYMBOL_ID)
+        : m_table(table), m_diag(diag), m_pointer_width(pointer_width), m_namespace(qualified_namespace) {}
     /// The evaluator only keeps a reference; binding it to a temporary would leave it dangling.
-    ConstEvaluator(const ConstTable&& table, DiagnosticEngine& diag, unsigned pointer_width = 64) = delete;
+    ConstEvaluator(const ConstTable&& table, DiagnosticEngine& diag, unsigned pointer_width = 64,
+                   SymbolID qualified_namespace = INVALID_SYMBOL_ID) = delete;
 
     // 3. Member functions LAST at the bottom
     /// Returns nullopt (after reporting, unless `report` is false) if `expr` is not a constant expression.
@@ -142,6 +145,10 @@ private:
 /// Renders a type for diagnostics and signature comparison, e.g. `const& Span<u8>`.
 std::string type_to_string(const TypeNode* type);
 
+/// The privacy unit of a source file: directory plus stem, without a platform suffix. `a/mutex.fo`, `a/mutex.fl` and
+/// `a/mutex_linux.fex` all give `a/mutex`, so they see each other's private declarations.
+std::string unit_key(std::string_view file);
+
 /// Records the defining file on every declaration of `module` (including inside top-level @if blocks)
 /// so diagnostics point at the right file even when several files are analysed together.
 void assign_source_file(ModuleAST* module, std::string_view path);
@@ -154,12 +161,32 @@ class SymbolTablePass0;
 
 /**
  * @struct ImportedModule
- * @brief A resolved `#import`: the module name and (if available) its symbol table.
+ * @brief What one `#import` makes visible: a module's symbol table, narrowed to the files the import's path named and,
+ *        for `#import {a, b} from path`, to those names.
+ * @details A module reached through a `pub #import` of an imported module is a *re-export*: it appears as a view of its
+ *          own (`m_direct` false) with the importing module's alias and selection applied.
  */
 struct ImportedModule {
     // 1. Member variables
-    SymbolID m_name{INVALID_SYMBOL_ID};
+    SymbolID m_name{INVALID_SYMBOL_ID};                  ///< the imported module
     const SymbolTablePass0* m_table{nullptr};
+    const ImportDeclNode* m_decl{nullptr};               ///< the import that brought this in
+    SymbolID m_alias{INVALID_SYMBOL_ID};                 ///< the last segment of the import path: `io::print`
+    std::set<std::string> m_units;                       ///< privacy units (files) the path named; empty means every file
+    bool m_selective{false};                             ///< `{a, b} from`: only `m_only` is visible
+    std::set<std::string, std::less<>> m_only;
+    bool m_is_pub{false};                                ///< `pub #import`: importers of this module see it too
+    bool m_direct{true};
+    mutable std::unordered_map<std::string_view, bool> m_file_cache;
+
+    // 2. Member functions
+    /// The first segment of `key` (`math` for `math::sqrt`) is one of the selected names, or nothing was selected.
+    [[nodiscard]] bool admits_name(SymbolID key) const;
+    /// `file` belongs to one of the named files.
+    [[nodiscard]] bool admits_file(std::string_view file) const;
+    [[nodiscard]] bool admits(SymbolID key, const DeclNode* decl) const {
+        return decl != nullptr && admits_name(key) && admits_file(decl->m_file);
+    }
 };
 
 /**
@@ -176,7 +203,9 @@ class SymbolTablePass0 {
     ConstTable m_definitions;                  ///< Module parameters and top-level `constx` values
     std::vector<DeclNode*> m_active_decls;     ///< Flattened, pruned declarations in source order
     std::vector<ImportDeclNode*> m_import_decls;
-    std::vector<ImportedModule> m_imports;
+    std::vector<ImportedModule> m_imports;     ///< one per resolved `#import` target
+    std::vector<ImportedModule> m_views;       ///< what is visible: the imports plus what they re-export
+    std::vector<ImportedModule> m_exports;     ///< what importers of this module see through its `pub #import`s
     std::unordered_map<SymbolID, std::vector<FunctionDeclNode*>> m_functions; ///< Free functions by name
     std::unordered_map<SymbolID, std::vector<FunctionDeclNode*>> m_methods;   ///< `Owner::name` and class-body methods, keyed by owner
     std::unordered_map<SymbolID, ClassDeclNode*> m_classes;
@@ -184,6 +213,9 @@ class SymbolTablePass0 {
     std::unordered_map<SymbolID, BlueprintDeclNode*> m_blueprints;
     std::unordered_map<SymbolID, EnumDeclNode*> m_enums;
     std::unordered_map<SymbolID, VarDeclNode*> m_globals;
+    std::set<SymbolID> m_namespaces;                           ///< qualified names (`a`, `a::b`) of the namespaces of this module
+    std::set<std::pair<SymbolID, SymbolID>> m_pub_functions;   ///< (owner, qualified name) of every function some declaration marks `pub`
+    std::set<SymbolID> m_pub_globals;                          ///< qualified names of the globals some declaration marks `pub`
     size_t m_pruned_count{0};
 
 public:
@@ -196,10 +228,19 @@ public:
     void define_parameters(const std::vector<ModuleParam>& params, const ConstTable& overrides = {});
     /// Collects the active declarations of `module`; only those of `section` when it is valid.
     void collect_declarations(const ModuleAST* module, SymbolID section = INVALID_SYMBOL_ID);
-    void add_import(ImportDeclNode* decl, const SymbolTablePass0* table);
+    /// Adds one module an import resolved to. `units` are the privacy units the import's path named (empty: all files).
+    void add_import(const ImportDeclNode* decl, SymbolID module, const SymbolTablePass0* table, std::set<std::string> units);
+    /// Checks the names of every `#import {a, b} from path`: each must exist in the imported files and be usable here.
+    void check_selective_imports() const;
     void define(const SymbolID name, const ConstValue &value) { m_definitions[name] = value; }
 
     [[nodiscard]] FunctionDeclNode* find_function(SymbolID name) const;
+    // This module's own declarations only (no imports).
+    [[nodiscard]] ClassDeclNode* find_local_class(SymbolID name) const { auto it = m_classes.find(name); return it == m_classes.end() ? nullptr : it->second; }
+    [[nodiscard]] EnumDeclNode* find_local_enum(SymbolID name) const { auto it = m_enums.find(name); return it == m_enums.end() ? nullptr : it->second; }
+    [[nodiscard]] RulesetDeclNode* find_local_ruleset(SymbolID name) const { auto it = m_rulesets.find(name); return it == m_rulesets.end() ? nullptr : it->second; }
+    [[nodiscard]] BlueprintDeclNode* find_local_blueprint(SymbolID name) const { auto it = m_blueprints.find(name); return it == m_blueprints.end() ? nullptr : it->second; }
+    [[nodiscard]] VarDeclNode* find_local_global(SymbolID name) const { auto it = m_globals.find(name); return it == m_globals.end() ? nullptr : it->second; }
     [[nodiscard]] FunctionDeclNode* find_method(SymbolID owner, SymbolID name) const;
     [[nodiscard]] ClassDeclNode* find_class(SymbolID name) const;
     [[nodiscard]] RulesetDeclNode* find_ruleset(SymbolID name) const;
@@ -210,6 +251,21 @@ public:
     /// Resolves `alias::function` against the imports (alias = last segment of the module path).
     [[nodiscard]] FunctionDeclNode* find_function_in_import(SymbolID alias, SymbolID name) const;
     [[nodiscard]] bool is_import_alias(SymbolID alias) const;
+    /// `ns::f` or `outer::inner::f` (or `alias::ns::f` through an import): a function declared inside a namespace. From inside
+    /// namespace `current` the path may also be relative to it or to an enclosing namespace (`inner::f` inside `outer`).
+    [[nodiscard]] FunctionDeclNode* find_namespace_function(const std::vector<SymbolID>& path, SymbolID current = INVALID_SYMBOL_ID) const;
+    [[nodiscard]] VarDeclNode* find_namespace_global(const std::vector<SymbolID>& path, SymbolID current = INVALID_SYMBOL_ID) const;
+    /// A function called as `name` from inside namespace `current` (innermost first), else the plain lookup.
+    [[nodiscard]] FunctionDeclNode* find_function_from(SymbolID current_namespace, SymbolID name) const;
+    [[nodiscard]] VarDeclNode* find_global_from(SymbolID current_namespace, SymbolID name) const;
+    [[nodiscard]] bool is_namespace(SymbolID qualified) const;
+    /// Is `first` the name of a namespace visible from inside `current` (itself, or nested in an enclosing one)?
+    [[nodiscard]] bool is_namespace_from(SymbolID current, SymbolID first) const;
+    /// Is the declaration marked `pub`, or does another declaration of the same function or constant (the `.fo` side of a `.fl`
+    /// definition, say) mark it?
+    [[nodiscard]] bool is_public(const DeclNode* decl) const;
+    /// Whether code in `viewing_file` may use `decl`: it is public, or both live in the same privacy unit.
+    [[nodiscard]] bool is_accessible(const DeclNode* decl, std::string_view viewing_file) const;
 
     [[nodiscard]] const std::vector<DeclNode*>& active_declarations() const { return m_active_decls; }
     [[nodiscard]] const std::vector<ImportDeclNode*>& import_declarations() const { return m_import_decls; }
@@ -253,6 +309,19 @@ struct ModuleInstantiation {
     ConstTable m_overrides;
 };
 
+/// One module an import brings in, with the privacy units (files) the import's path named in it.
+struct ResolvedImportTarget {
+    // 1. Member variables
+    SymbolID m_module{INVALID_SYMBOL_ID};
+    std::set<std::string> m_units;        ///< `unit_key` of each named file; the import sees only declarations from these
+};
+
+/// What an `#import` resolved to: a path can name several files, and those can belong to several modules.
+struct ResolvedImport {
+    // 1. Member variables
+    std::vector<ResolvedImportTarget> m_targets;
+};
+
 /**
  * @struct ModuleNode
  * @brief Represents a module within the Pass 1 dependency graph.
@@ -285,6 +354,10 @@ class ModuleGraphPass1 {
     std::vector<std::filesystem::path> m_search_paths;
     std::map<std::string, ModuleNode> m_modules;   ///< Ordered by name for deterministic output
     std::vector<SymbolID> m_topological_order;
+    std::vector<ModuleFile> m_files;                       ///< every parsed file, in the order it was added
+    std::set<std::string> m_loaded;                        ///< normalized paths of those files
+    std::map<const ImportDeclNode*, ResolvedImport> m_resolved;
+    std::filesystem::path m_std_root{"stdlib"};            ///< what `@std:` means
     size_t m_indexed_files{0};
     BMICacheManager* m_cache{nullptr};   ///< optional `.flbmi` cache used instead of re-parsing unchanged files
 
@@ -301,8 +374,13 @@ public:
     void index_search_paths();
     /// Parses one file and registers it under every module section it declares.
     void add_source_file(const std::filesystem::path& path);
-    /// Resolves imports, validates template arguments and records instantiations.
+    /// Where `@std:` points (default `stdlib`).
+    void set_std_root(const std::filesystem::path& root) { m_std_root = root; }
+    /// Resolves imports (loading the files they name that were not indexed yet), validates template arguments and
+    /// records instantiations.
     bool resolve_imports();
+    /// The modules and files an import resolved to (null before `resolve_imports`, or when it did not resolve).
+    [[nodiscard]] const ResolvedImport* resolved_import(const ImportDeclNode* decl) const;
     /// Orders modules so dependencies come first; reports import cycles.
     bool sort_topological();
 
@@ -311,6 +389,16 @@ public:
     [[nodiscard]] const std::map<std::string, ModuleNode>& modules() const { return m_modules; }
     [[nodiscard]] size_t indexed_file_count() const { return m_indexed_files; }
     [[nodiscard]] const TargetConfig& target() const { return m_target; }
+
+private:
+    /// The file-system location (without extension) an import path names, or empty with `error` set.
+    [[nodiscard]] std::filesystem::path import_base(const ImportDeclNode& imp, const std::filesystem::path& from, std::string& error) const;
+    /// Indexed files named by `base`: those of the unit `base`, else those directly inside the folder `base`.
+    [[nodiscard]] std::vector<size_t> match_files(const std::filesystem::path& base) const;
+    /// Loads the files `base` names from disk (a unit, else a folder); true when it found any.
+    bool load_from_disk(const std::filesystem::path& base);
+    /// The project root for a file: the folder with `fool.toml` above it, else the search root holding it.
+    [[nodiscard]] std::filesystem::path project_root(const std::filesystem::path& file) const;
 };
 
 // =============================================================================================
@@ -402,6 +490,7 @@ class TypeCheckerPass2 {
     const FunctionDeclNode* m_current_fn{nullptr};
     std::vector<std::vector<std::vector<SymbolBinding>>> m_enclosing_scopes; ///< scope stacks of the code around the lambda being checked
     const ClassDeclNode* m_current_owner{nullptr};
+    SymbolID m_namespace{INVALID_SYMBOL_ID};   ///< qualified namespace of the function or global being checked
     int m_loop_depth{0};
     std::vector<SymbolID> m_narrow_log;   ///< names narrowed so far, undone in LIFO order when their scope ends
     std::vector<size_t> m_narrow_marks;   ///< m_narrow_log size at the start of each open scope
@@ -447,6 +536,16 @@ private:
     void warn_if_shadowing(const SymbolBinding& binding) const;
 
     SymbolBinding make_binding(SymbolID name, const TypeNode* type, BindingKind kind, const SourceSpan &span);
+
+    // visibility (`pub`) and namespaces
+    /// Reports a use of a private `decl` from a file outside its privacy unit. `what` is "function", "constant", ...
+    void check_access(const DeclNode* decl, SourceSpan span, std::string_view what, const std::string& name) const;
+    void check_type_access(const TypeNode* type, SourceSpan span) const;
+    void note_declared_here(std::string_view file, SourceSpan span, const std::string& name) const;
+    void check_field_access(const ClassDeclNode* cls, const ParameterDecl& field, SourceSpan span) const;
+    void check_method_access(const FunctionDeclNode* method, SymbolID owner, SourceSpan span) const;
+    [[nodiscard]] bool is_known_name(SymbolID name) const;
+    [[nodiscard]] std::vector<SymbolID> path_segments(const PathExpr* path) const;
 
     // declarations
     void check_declaration_consistency() const;

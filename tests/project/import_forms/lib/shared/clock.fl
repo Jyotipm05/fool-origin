@@ -1,0 +1,4 @@
+module imp::clock;
+
+pub fn now() -> i32 { return 100; }
+pub fn epoch() -> i32 { return 0; }

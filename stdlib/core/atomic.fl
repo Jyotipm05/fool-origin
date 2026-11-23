@@ -1,5 +1,5 @@
 module std::core;
-#import std::core::intrinsics;
+#import @std:core:sys:intrinsics;
 
 fn Atomic<T>::new(initial: T) -> Atomic<T> {
     return Atomic<T> { value: initial };

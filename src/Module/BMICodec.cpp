@@ -46,7 +46,7 @@ enum Tag : uint8_t {
     // statements
     StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional,
     // declarations
-    DeclCondBlock = 1, DeclImport, DeclVar, DeclFunction, DeclRuleset, DeclClass, DeclBlueprint, DeclEnum
+    DeclCondBlock = 1, DeclImport, DeclVar, DeclFunction, DeclRuleset, DeclClass, DeclBlueprint, DeclEnum, DeclNamespace
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -157,6 +157,7 @@ private:
             type(p.m_type);
             expr(p.m_default_value);
             span(p.m_span);
+            boolean(p.m_is_pub);
         }
     }
 
@@ -289,6 +290,7 @@ private:
         else if (dynamic_cast<const ClassDeclNode*>(d)) tag = DeclClass;
         else if (dynamic_cast<const BlueprintDeclNode*>(d)) tag = DeclBlueprint;
         else if (dynamic_cast<const EnumDeclNode*>(d)) tag = DeclEnum;
+        else if (dynamic_cast<const NamespaceDeclNode*>(d)) tag = DeclNamespace;
         if (tag == 0) { fail(); return; }
 
         u8(tag);
@@ -302,6 +304,8 @@ private:
         }
         boolean(d->m_is_active);
         sym(d->m_module);
+        boolean(d->m_is_pub);
+        sym(d->m_namespace);
         // DeclNode::m_file is deliberately not stored: it names the path the file has *now*, and the
         // driver assigns it after loading (a renamed file with identical content still hits the cache).
 
@@ -315,6 +319,12 @@ private:
         case DeclImport: {
             const auto* n = static_cast<const ImportDeclNode*>(d);
             sym(n->m_module_path);
+            u8(static_cast<uint8_t>(n->m_root)); count(n->m_up); sym(n->m_pack); sym(n->m_drive);
+            count(n->m_segments.size());
+            for (SymbolID s : n->m_segments) sym(s);
+            boolean(n->m_selective);
+            count(n->m_names.size());
+            for (SymbolID s : n->m_names) sym(s);
             count(n->m_template_args.size());
             for (const ImportArg& a : n->m_template_args) { sym(a.m_name); expr(a.m_value); span(a.m_span); }
             break;
@@ -332,6 +342,11 @@ private:
             parameters(n->m_params);
             type(n->m_return_type);
             stmts(n->m_body);
+            break;
+        }
+        case DeclNamespace: {
+            const auto* n = static_cast<const NamespaceDeclNode*>(d);
+            sym(n->m_name); decls(n->m_declarations);
             break;
         }
         case DeclRuleset: {
@@ -527,13 +542,14 @@ private:
 
     std::vector<ParameterDecl> parameters() {
         std::vector<ParameterDecl> out;
-        uint32_t n = count(7);
+        uint32_t n = count(8);
         for (uint32_t i = 0; i < n && m_ok; ++i) {
             ParameterDecl p;
             p.m_name = sym();
             p.m_type = type();
             p.m_default_value = expr();
             p.m_span = span();
+            p.m_is_pub = boolean();
             out.push_back(p);
         }
         return out;
@@ -797,6 +813,7 @@ private:
         case DeclClass: d = m_arena.create<ClassDeclNode>(); break;
         case DeclBlueprint: d = m_arena.create<BlueprintDeclNode>(); break;
         case DeclEnum: d = m_arena.create<EnumDeclNode>(); break;
+        case DeclNamespace: d = m_arena.create<NamespaceDeclNode>(); break;
         default: fail(); return nullptr;
         }
 
@@ -815,6 +832,8 @@ private:
         }
         d->m_is_active = boolean();
         d->m_module = sym();
+        d->m_is_pub = boolean();
+        d->m_namespace = sym();
 
         switch (tag) {
         case DeclCondBlock: {
@@ -831,6 +850,13 @@ private:
         case DeclImport: {
             auto* n = static_cast<ImportDeclNode*>(d);
             n->m_module_path = sym();
+            n->m_root = static_cast<ImportRoot>(u8());
+            n->m_up = count(0);
+            n->m_pack = sym();
+            n->m_drive = sym();
+            for (uint32_t i = 0, segments = count(4); i < segments && m_ok; ++i) n->m_segments.push_back(sym());
+            n->m_selective = boolean();
+            for (uint32_t i = 0, names = count(4); i < names && m_ok; ++i) n->m_names.push_back(sym());
             uint32_t args = count(9);
             for (uint32_t i = 0; i < args && m_ok; ++i) {
                 ImportArg a;
@@ -862,6 +888,12 @@ private:
             n->m_params = parameters();
             n->m_return_type = type();
             n->m_body = stmts();
+            break;
+        }
+        case DeclNamespace: {
+            auto* n = static_cast<NamespaceDeclNode*>(d);
+            n->m_name = sym();
+            n->m_declarations = decls();
             break;
         }
         case DeclRuleset: {

@@ -1,10 +1,10 @@
 module std::async;
 
-enum Poll<T> {
+pub enum Poll<T> {
     Ready(T),
     Pending,
 }
 
-ruleset Future<T> {
+pub ruleset Future<T> {
     fn poll(this &self) -> Poll<T>;
 }

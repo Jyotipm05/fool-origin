@@ -1,0 +1,3 @@
+module lazy::util;
+
+pub fn helper() -> i32 { return 3; }

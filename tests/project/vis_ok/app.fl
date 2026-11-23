@@ -1,0 +1,10 @@
+module vis::app;
+
+#import store;
+#import shapes;
+
+fn run() -> i32 {
+    var c: Counter = make();
+    c.bump();
+    return c.n + LIMIT + linux_value() + geo::area(2, 3) + geo::inner::perimeter(1, 2) + shapes::geo::UNIT + shape_total();
+}

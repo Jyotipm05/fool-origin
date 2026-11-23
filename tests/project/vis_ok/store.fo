@@ -1,0 +1,17 @@
+// Interface of a module whose implementation (store.fl) and platform overlay (store_linux.fex) share one privacy unit:
+// they can use the private declarations below; other files cannot.
+module vis::store;
+
+pub class Counter {
+    pub n: i32;
+    secret: i32;
+
+    pub fn bump(this &self);
+    fn hidden(this &self) -> i32;
+}
+
+pub fn make() -> Counter;
+fn helper() -> i32;
+
+pub constx LIMIT: i32 = 10;
+constx SECRET: i32 = 3;

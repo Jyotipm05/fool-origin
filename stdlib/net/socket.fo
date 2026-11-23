@@ -1,13 +1,13 @@
 module std::net;
-#import std::core;
+#import @std:core;
 
-class TcpSocket {
-    fd: i32;
-    connected: bool;
+pub class TcpSocket {
+    pub fd: i32;
+    pub connected: bool;
 
-    fn open() -> TcpSocket;
-    fn connect(this &self, ip: StringView, port: u16) -> bool;
-    fn send(this &self, data: const& Span<u8>) -> isize;
-    fn receive(this &self, buffer: &Span<u8>) -> isize;
-    fn close(this &self);
+    pub fn open() -> TcpSocket;
+    pub fn connect(this &self, ip: StringView, port: u16) -> bool;
+    pub fn send(this &self, data: const& Span<u8>) -> isize;
+    pub fn receive(this &self, buffer: &Span<u8>) -> isize;
+    pub fn close(this &self);
 }

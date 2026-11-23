@@ -1,0 +1,17 @@
+module vis::store;
+
+fn helper() -> i32 {
+    return SECRET + 1;
+}
+
+pub fn make() -> Counter {
+    return Counter { n: 0, secret: helper() };
+}
+
+fn Counter::hidden(this &self) -> i32 {
+    return self.secret;
+}
+
+fn Counter::bump(this &self) {
+    self.n = self.n + self.hidden();
+}

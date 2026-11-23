@@ -1,5 +1,5 @@
 module std::net;
-#import std::net::ffi;
+#import @std:net:sys:ffi;
 
 fn TcpSocket::open() -> TcpSocket {
     var fd = ffi::sys_socket(2 /*AF_INET */, 1 /* SOCK_STREAM*/, 0);

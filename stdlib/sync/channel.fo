@@ -1,9 +1,9 @@
 module std::sync;
 
-class Channel<T> {
-    capacity: usize;
+pub class Channel<T> {
+    pub capacity: usize;
 
-    fn create(capacity: usize) -> Channel<T>;
-    fn send(this &self, item: T) -> bool;
-    fn receive(this &self) -> T;
+    pub fn create(capacity: usize) -> Channel<T>;
+    pub fn send(this &self, item: T) -> bool;
+    pub fn receive(this &self) -> T;
 }

@@ -78,6 +78,7 @@ public:
     // 3. Member functions LAST at the bottom
     void set_current_file(std::string file) { m_current_file = std::move(file); }
     void set_echo(bool echo) { m_echo = echo; }
+    [[nodiscard]] const std::string& current_file() const { return m_current_file; }
 
     void report(Severity severity, SourceSpan span, std::string message) {
         if (severity == Severity::Error) ++m_error_count;

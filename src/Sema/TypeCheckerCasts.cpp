@@ -190,7 +190,7 @@ StaticType TypeCheckerPass2::compute_type(const ExprNode* expr) {
             }
             return binding->m_static_type;
         }
-        if (const VarDeclNode* global = m_pass0.find_global(id->m_identifier)) return static_type_of(global->m_type);
+        if (const VarDeclNode* global = m_pass0.find_global_from(m_namespace, id->m_identifier)) return static_type_of(global->m_type);
         return {};
     }
     if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) return static_type_of(cast->m_target);
@@ -625,7 +625,7 @@ void TypeCheckerPass2::check_named_cast(const CastExpr* cast) {
             if (target.m_kind == Kind::Int && !target.m_literal) {
                 // A constant operand must be representable: static_cast never truncates silently.
                 const ConstTable constants = visible_constants();
-                const ConstEvaluator evaluator(constants, m_diag, pointer_bits);
+                const ConstEvaluator evaluator(constants, m_diag, pointer_bits, m_namespace);
                 if (auto value = evaluator.evaluate(cast->m_operand, /*report=*/false)) {
                     int64_t integer = value->m_kind == ConstValue::Kind::Float ? static_cast<int64_t>(value->m_float)
                                                                                 : (value->m_kind == ConstValue::Kind::Bool ? (value->m_bool ? 1 : 0)

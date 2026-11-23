@@ -1,0 +1,31 @@
+module vis::lib;
+
+pub class Box {
+    pub open: i32;
+    closed: i32;
+
+    pub fn show(this const& self) -> i32;
+    fn peek(this const& self) -> i32;
+}
+
+class Hidden {
+    pub value: i32;
+}
+
+pub fn make_box() -> Box;
+fn internal_helper() -> i32;
+
+pub constx VISIBLE: i32 = 1;
+constx HIDDEN_CONST: i32 = 2;
+
+pub namespace open_ns {
+    fn f() -> i32 {
+        return 1;
+    }
+}
+
+namespace closed_ns {
+    fn g() -> i32 {
+        return 2;
+    }
+}

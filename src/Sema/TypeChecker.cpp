@@ -8,6 +8,7 @@
  */
 
 module;
+#include <filesystem>
 #include <ranges>
 #include <memory>
 #include <optional>
@@ -86,6 +87,81 @@ namespace fool {
             if (decl != nullptr && !decl->m_file.empty()) diag.set_current_file(std::string(decl->m_file));
         }
     } // namespace
+
+    // ---------------------------------------------------------------------------------------------
+    // Visibility
+    // ---------------------------------------------------------------------------------------------
+
+    void TypeCheckerPass2::check_access(const DeclNode *decl, const SourceSpan span, const std::string_view what,
+                                        const std::string &name) const {
+        if (m_pass0.is_accessible(decl, m_diag.current_file())) return;
+        const std::string file = std::filesystem::path(std::string(decl->m_file)).filename().string();
+        m_diag.error(span, std::string(what) + " '" + name + "' is private to '" + file +
+                           "'; declare it `pub` to use it from another file");
+        note_declared_here(decl->m_file, decl->m_span, name);
+    }
+
+    /// A note at the private declaration, which lives in another file than the one being checked.
+    void TypeCheckerPass2::note_declared_here(const std::string_view file, const SourceSpan span, const std::string &name) const {
+        const std::string viewing = m_diag.current_file();
+        m_diag.set_current_file(std::string(file));
+        m_diag.note(span, "'" + name + "' is declared here without `pub`");
+        m_diag.set_current_file(viewing);
+    }
+
+    void TypeCheckerPass2::check_type_access(const TypeNode *type, const SourceSpan span) const {
+        if (type == nullptr) return;
+        switch (type->m_kind) {
+            case TypeNodeKind::Path: {
+                if (type->m_path.empty()) return;
+                const SymbolID name = type->m_path.back();
+                const DeclNode *decl = m_pass0.find_class(name);
+                if (decl == nullptr) decl = m_pass0.find_enum(name);
+                if (decl == nullptr) decl = m_pass0.find_ruleset(name);
+                if (decl == nullptr) decl = m_pass0.find_blueprint(name);
+                if (decl != nullptr && !is_generic_parameter(name)) check_access(decl, span, "type", name_of(name));
+                for (const GenericArg &arg: type->m_generic_args) check_type_access(arg.m_type, span);
+                return;
+            }
+            case TypeNodeKind::Pointer:
+            case TypeNodeKind::Reference:
+            case TypeNodeKind::Optional:
+                check_type_access(type->m_inner, span);
+                return;
+            case TypeNodeKind::Function:
+                for (const TypeNode *param: type->m_param_types) check_type_access(param, span);
+                check_type_access(type->m_inner, span);
+                return;
+            case TypeNodeKind::Never:
+                return;
+        }
+    }
+
+    void TypeCheckerPass2::check_field_access(const ClassDeclNode *cls, const ParameterDecl &field,
+                                              const SourceSpan span) const {
+        if (field.m_is_pub || cls->m_file.empty() || m_diag.current_file().empty()) return;
+        if (unit_key(cls->m_file) == unit_key(m_diag.current_file())) return;
+        const std::string file = std::filesystem::path(std::string(cls->m_file)).filename().string();
+        m_diag.error(span, "field '" + name_of(field.m_name) + "' of '" + name_of(cls->m_name) + "' is private to '" + file +
+                           "'; declare it `pub` inside the " + (cls->m_is_struct ? "struct" : "class"));
+        note_declared_here(cls->m_file, field.m_span, name_of(field.m_name));
+    }
+
+    void TypeCheckerPass2::check_method_access(const FunctionDeclNode *method, const SymbolID owner,
+                                               const SourceSpan span) const {
+        // Methods written in a class body are public only with `pub`; those of a ruleset or blueprint follow it.
+        if (m_pass0.find_ruleset(owner) != nullptr || m_pass0.find_blueprint(owner) != nullptr) return;
+        check_access(method, span, "method", name_of(owner) + "::" + name_of(method->m_name));
+    }
+
+    bool TypeCheckerPass2::is_known_name(const SymbolID name) const {
+        return m_pass0.is_known_global(name) || m_pass0.find_global_from(m_namespace, name) != nullptr ||
+               m_pass0.find_function_from(m_namespace, name) != nullptr;
+    }
+
+    std::vector<SymbolID> TypeCheckerPass2::path_segments(const PathExpr *path) const {
+        return {path->m_segments.begin(), path->m_segments.end()};
+    }
 
     TypeCheckerPass2::TypeCheckerPass2(SymbolTablePass0 &pass0, DiagnosticEngine &diag)
         : m_pass0(pass0), m_diag(diag) {
@@ -302,6 +378,7 @@ namespace fool {
             if (const auto *cls = dynamic_cast<ClassDeclNode *>(decl)) {
                 std::set<SymbolID> fields;
                 for (const ParameterDecl &field: cls->m_fields) {
+                    check_type_access(field.m_type, field.m_span);
                     if (!fields.insert(field.m_name).second) {
                         m_diag.error(field.m_span,
                                      "duplicate field '" + name_of(field.m_name) + "' in '" + name_of(cls->m_name) +
@@ -394,6 +471,10 @@ namespace fool {
 
                 for (const FunctionDeclNode *impl: impls) {
                     use_file(m_diag, impl);
+                    if (cls == nullptr && blueprint == nullptr && m_pass0.is_namespace(owner)) {
+                        m_diag.error(impl->m_span, "functions of namespace '" + name_of(owner) + "' are written inside its block, not as 'fn " +
+                                                   name_of(owner) + "::" + name_of(method_name) + "'");
+                    }
                     if (cls != nullptr) {
                         bool declared = false;
                         for (const FunctionDeclNode *method: cls->m_methods)
@@ -433,14 +514,22 @@ namespace fool {
     }
 
     void TypeCheckerPass2::check_global_variable(const VarDeclNode *var) {
+        check_type_access(var->m_type, var->m_span);
         if (var->m_initializer == nullptr) return;
+        m_namespace = var->m_namespace;
+        struct ResetNamespace {
+            SymbolID &m_ref;
+            ~ResetNamespace() { m_ref = INVALID_SYMBOL_ID; }
+        } reset{m_namespace};
         if (var->m_kind == BindingKind::Constx) {
-            if (const auto it = m_pass0.definitions().find(var->m_name); it != m_pass0.definitions().end())
+            std::string key = var->m_namespace != INVALID_SYMBOL_ID ? name_of(var->m_namespace) + "::" : std::string();
+            key += name_of(var->m_name);
+            if (const auto it = m_pass0.definitions().find(StringInterner::get().intern(key)); it != m_pass0.definitions().end())
                 check_const_fits_type(
                 var->m_type, it->second, var->m_span, "constant");
             return;
         }
-        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
+        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width, m_namespace);
         if (const auto value = evaluator.evaluate(var->m_initializer, /*report=*/false)) {
             check_const_fits_type(var->m_type, *value, var->m_span, "variable");
         }
@@ -463,7 +552,10 @@ namespace fool {
         const size_t errors_before = m_diag.error_count();
         m_current_fn = fn;
         m_current_owner = owner;
+        m_namespace = fn->m_namespace;
         m_loop_depth = 0;
+        for (const ParameterDecl &param: fn->m_params) check_type_access(param.m_type, param.m_span);
+        check_type_access(fn->m_return_type, fn->m_span);
         m_scopes.clear();
         m_narrow_log.clear();
         m_narrow_marks.clear();
@@ -500,7 +592,7 @@ namespace fool {
             }
             declare(make_binding(param.m_name, param.m_type, BindingKind::Mutable, param.m_span));
             if (param.m_default_value != nullptr) {
-                ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
+                ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width, m_namespace);
                 if (auto value = evaluator.evaluate(param.m_default_value, /*report=*/false)) {
                     check_const_fits_type(param.m_type, *value, param.m_span, "parameter default");
                 }
@@ -517,6 +609,7 @@ namespace fool {
         pop_scope();
         m_current_fn = nullptr;
         m_current_owner = nullptr;
+        m_namespace = INVALID_SYMBOL_ID;
         return m_diag.error_count() == errors_before;
     }
 
@@ -525,7 +618,7 @@ namespace fool {
     // ---------------------------------------------------------------------------------------------
 
     const ConditionalBranch *TypeCheckerPass2::select_branch(const ConditionalStmt *stmt, const bool report) const {
-        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width);
+        const ConstEvaluator evaluator(m_pass0.definitions(), m_diag, m_pass0.target().m_pointer_width, m_namespace);
         for (const ConditionalBranch &branch: stmt->m_branches) {
             if (branch.m_condition == nullptr) return &branch; // @else
             const auto value = evaluator.evaluate(branch.m_condition, report);
@@ -577,7 +670,7 @@ namespace fool {
             } else if (ret->m_value != nullptr) {
                 const size_t errors_before_const_checks = m_diag.error_count();
                 const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
-                const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
+                const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width, m_namespace);
                 if (const auto value = evaluator.evaluate(ret->m_value, /*report=*/false)) {
                     check_const_fits_type(rt, *value, ret->m_span, "return value");
                 }
@@ -661,10 +754,11 @@ namespace fool {
 
     void TypeCheckerPass2::check_var_decl(const VarDeclNode *var) {
         if (var->m_initializer != nullptr) check_expression(var->m_initializer);
+        check_type_access(var->m_type, var->m_span);
 
         const size_t errors_before_const_checks = m_diag.error_count();
         const ConstTable constants = visible_constants(); // must outlive the evaluator, which keeps a reference
-        const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width);
+        const ConstEvaluator evaluator(constants, m_diag, m_pass0.target().m_pointer_width, m_namespace);
         std::optional<ConstValue> constant;
         if (var->m_kind == BindingKind::Constx) {
             if (var->m_initializer != nullptr) {

@@ -1,0 +1,20 @@
+module tests::import_syntax_errors;
+
+// expect-error: write import paths with single ':' separators
+#import std::core;
+
+// expect-error: unknown import root '@foo'
+#import @foo:x;
+
+// expect-error: Expected 'from' after the imported names
+#import {a, b} @std:core;
+
+// expect-error: '#import { }' names nothing to import
+#import {} from @std:core;
+
+// expect-error: Expected a package name after '@pack:'
+#import @pack:;
+
+pub fn fine() -> i32 {
+    return 1;
+}

@@ -1,0 +1,4 @@
+module imp::text;
+
+pub fn shout() -> i32 { return 1; }
+pub fn whisper() -> i32 { return 2; }

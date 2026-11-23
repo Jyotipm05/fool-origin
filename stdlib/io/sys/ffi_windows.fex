@@ -1,0 +1,21 @@
+module std::io::win32_ffi;
+
+@target(os = "windows")
+@extern("C", link_name = "CreateFileA")
+pub fn CreateFileA(name: const*u8, acc: u32, share: u32, sec:*void, disp: u32, flags: u32, templ: *void) ->*void;
+
+@target(os = "windows")
+@extern("C", link_name = "ReadFile")
+pub fn ReadFile(h: *void, buf:*u8, len: u32, read: *u32, ov:*void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "WriteFile")
+pub fn WriteFile(h: *void, buf: const* u8, len: u32, written: *u32, ov:*void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "CloseHandle")
+pub fn CloseHandle(h: *void) -> i32;
+
+@target(os = "windows")
+@extern("C", link_name = "GetStdHandle")
+pub fn GetStdHandle(nStdHandle: u32) -> *void;

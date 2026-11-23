@@ -1,5 +1,5 @@
 module std::io;
-#import std::io::posix_ffi;
+#import @std:io:sys:ffi;
 
 fn File::open(path: StringView, mode: FileMode) -> File {
     var flags = 0;

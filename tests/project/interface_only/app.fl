@@ -1,6 +1,6 @@
 module tests::app;
 
-#import tests::geometry;
+#import geometry;
 
 fn run() -> i32 {
     var a = geometry::Vec2 { x: 1, y: 2 };

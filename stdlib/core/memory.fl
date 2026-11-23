@@ -1,5 +1,5 @@
 module std::core;
-#import std::core::sys_mem;
+#import @std:core:sys:sys_mem;
 
 fn RawMemory::copy(dest: *u8, src: const* u8, bytes: usize) {
     for (var i: usize = 0; i < bytes; i = i + 1) {

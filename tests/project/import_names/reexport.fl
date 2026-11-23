@@ -1,0 +1,7 @@
+module imp_names::reexport;
+
+#import prelude;
+
+fn run() -> i32 {
+    return shout() + whisper();
+}

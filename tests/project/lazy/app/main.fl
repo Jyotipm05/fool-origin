@@ -1,0 +1,8 @@
+module lazy::main;
+
+// util.fl is not under the search root (lazy/app): the import loads it from disk.
+#import @sup:shared:util;
+
+fn run() -> i32 {
+    return helper();
+}

@@ -34,8 +34,8 @@ the stem suffix: `memory_posix.fex`, `mutex_linux.fex`, `file_windows.fl`, `..._
 - **Integer literals:** decimal (`4096`), hexadecimal (`0xFF`), binary (`0b1010`); `_` may separate digits (`5_000_000`).
 - **Float literals:** `2.5`, `1.0`.
 - **Strings:** `"text"`. A string literal has type `const* u8`.
-- **Keywords:** `import module class struct enum ruleset blueprint fn async await this var const constx ref return if else
-  for in while break continue true false null as`. `in` and `ref` are reserved and not used by any construct yet.
+- **Keywords:** `import module pub namespace class struct enum ruleset blueprint fn async await this var const constx ref
+  return if else for in while break continue true false null as`. `in` and `ref` are reserved and not used by any construct yet.
 - **Marker characters:** `#import` (import directive), `@` (compile-time directive, never an operator),
   `$` (the `$serialize` attribute), `&` (address-of, reference types, and reflection when followed by
   `field_count(`, `type_name(` or `is_serializable(`).
@@ -49,15 +49,94 @@ Statements end with `;`. Blocks are `{ ... }`.
 ```fool
 module net::http<TLS = 0, PORT = 80>;      // optional template parameters with default values
 
-#import std::core;                         // use the defaults
-#import net::http<TLS = 1>;                // override compile-time parameters at the import site
+#import @std:core;                         // everything public in the standard library's core folder
+#import @src:net:http<TLS = 1>;            // override compile-time parameters at the import site
+#import {Counter, make} from store;        // only these names, from the file `store` next to this one
+pub #import @lib:shared:clock;             // import and re-export: importers of this file see it too
 ```
 
+An import names **files by path**. Segments are separated by single colons (`a:b:c` is the file `a/b/c`); `::` is for
+names inside a module and is not accepted in an import path.
+
+| Path starts with | Meaning |
+| :--- | :--- |
+| `name:...` | next to the importing file |
+| `@std:...` | the standard library (`--std-root`, default `stdlib`) |
+| `@src:...` | the project's `src` folder (the nearest enclosing `src`, else `<project root>/src`) |
+| `@lib:...` | the `lib` folder of the library or package (found the same way) |
+| `@sup:...` | the folder above the importing file's; `@sup:@sup:x` goes up two |
+| `@pack:name:...` | the installed package `name` (its `lib` folder if it has one), under `<project root>/packages` |
+| `:c:...` | a drive path (`C:/...`) |
+
+The project root is the nearest folder above the file that holds a `fool.toml` (not read yet), else the `-I` search root.
+
+- **What a path names.** A file name stands for the whole *unit*: `store.fo`, `store.fl` and `store_linux.fex` together. If no
+  such file exists but a folder does, the import covers every file directly inside that folder (not sub-folders): `@std:core`
+  is all of `stdlib/core/*`. Files named by an import that were not indexed from a search root are loaded from disk.
+- **What it brings in.** The `pub` declarations of exactly those files (plus the private ones, which then fail with a
+  "private" error when used). Names are used unqualified, or with the last path segment in front (`store::make()`).
+- **`{a, b} from path`** brings in only those names. Each must exist in the named files and be usable from here
+  (`'x' is not declared in 'path'`, `'x' is private to 'file'`). A namespace can be selected by its name.
+- **`pub #import`** re-exports: whoever imports this file also gets what it imported, narrowed by `{...}` if given.
+- **Modules.** `module a::b;` still names the module a file belongs to and owns its template parameters; a path can reach files
+  of several modules. Template arguments (`<A = 1>`) need a path that names exactly one module.
 - A module template parameter is a compile-time integer. Code can test it with `@if def(NAME) && (NAME == 1)`.
   Every distinct set of arguments an importer uses is checked as its own instantiation.
 - Imports must resolve, may not import the module itself, and may not form a cycle. The compiler orders modules
   topologically.
 - A name from another module is reached with a path: `sys_mem::os_alloc_pages(n)`, `Shape::Circle`.
+- Only `pub` declarations of an imported module can be used (next section).
+
+### Visibility: `pub`
+
+A function, variable, constant, class, struct, enum, ruleset or blueprint is **private to its file** unless it is
+written `pub`:
+
+```fool
+pub fn area(w: i32, h: i32) -> i32 { return w * h; }   // other files may call it
+fn helper() -> i32 { return 3; }                       // this file only
+pub constx LIMIT: i32 = 10;
+pub class Counter { ... }
+```
+
+- **Privacy unit.** Files with the same name stem form one unit and see each other's private declarations:
+  `store.fo`, `store.fl` and `store_linux.fex` (a platform suffix does not change the stem). A different stem is a
+  different file, even inside the same module.
+- **Interface and definition.** `pub` on a declaration covers its definition: `pub fn make() -> Counter;` in `store.fo`
+  makes the `fn make() -> Counter { ... }` in `store.fl` public; you do not repeat it.
+- **Members.** Fields and methods of a class or struct are private to the file unless each is written `pub` *inside* the
+  class body (`pub n: i32;`, `pub fn bump(this &self);`). A type being `pub` does not make its members public.
+  Enum variants follow their enum; the functions of a ruleset or blueprint follow it.
+- A use of a private name from another unit is an error that names the file and points at the declaration
+  (`function 'helper' is private to 'store.fo'; declare it `pub` to use it from another file`).
+
+### Namespaces
+
+A `namespace` groups functions and constants under a name. Its members are reached as `name::item`:
+
+```fool
+pub namespace geo {
+    constx UNIT: i32 = 1;
+
+    fn area(w: i32, h: i32) -> i32 { return w * h * UNIT; }   // siblings are used by their plain name
+
+    namespace inner {                                          // namespaces nest: geo::inner::...
+        fn perimeter(w: i32, h: i32) -> i32 { return 2 * (w + h) * UNIT; }
+    }
+}
+
+fn run() -> i32 { return geo::area(2, 3) + geo::inner::perimeter(1, 2); }
+```
+
+- `pub namespace` makes **every** member public (including those of nested namespaces); a plain `namespace` keeps its
+  members private to the file unless a member is itself written `pub`.
+- A namespace can hold functions, constants and variables, and nested namespaces. Types (classes, enums, ...) cannot be
+  declared inside one yet.
+- The functions are defined inside the block: `fn geo::area(...)` outside it is an error. Bodies live in `.fl` files, as for
+  any function.
+- A bare name inside a namespace finds the namespace's own members first, then those of the enclosing namespaces, then the
+  file's top level.
+- After `#import shapes;`, a namespace of that file is used as `geo::area(...)` or `shapes::geo::area(...)`.
 
 ---
 
@@ -384,6 +463,9 @@ missed error is possible but a wrong one should not be.
 
 ## 10. What does not exist yet
 
+- **Packages.** `@pack:` finds a package under the project's `packages` folder only. `fool.toml`, `overwrite.toml`, a shared
+  package collection, git sources and a package manager are designed but not built.
+- **Types inside namespaces.**
 - **Code generation.** The compiler parses, checks, lowers to HIR and builds a control-flow graph (MIR); nothing executes yet.
 - **Optimization, linking.**
 - **A way to read an enum payload.** A variant can be built (`Shape::Circle(2.0)`) and plain enums compared with `==`,

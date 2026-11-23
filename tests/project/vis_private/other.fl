@@ -1,0 +1,6 @@
+module vis::lib;
+
+// Same module as lib.fo but another file: lib.fo's private declarations are not visible here.
+fn same_module_but_other_file() -> i32 {
+    return internal_helper();
+}

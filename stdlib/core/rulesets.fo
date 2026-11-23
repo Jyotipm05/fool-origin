@@ -1,13 +1,13 @@
 module std::core;
 
 /// Nominal contract for types supporting equality comparisons
-ruleset Equatable<T> {
+pub ruleset Equatable<T> {
     fn operator==(this const& self, other: const& T) -> bool;
     fn operator!=(this const& self, other: const& T) -> bool;
 }
 
 /// Nominal contract for ordering relations
-ruleset Comparable<T: Equatable> {
+pub ruleset Comparable<T: Equatable> {
     fn operator<(this const& self, other: const& T) -> bool;
     fn operator<=(this const& self, other: const& T) -> bool;
     fn operator>(this const& self, other: const& T) -> bool;
@@ -15,7 +15,7 @@ ruleset Comparable<T: Equatable> {
 }
 
 /// Arithmetic capability bounds
-ruleset Numeric<T> {
+pub ruleset Numeric<T> {
     fn operator+(this const& self, other: const& T) -> T;
     fn operator-(this const& self, other: const& T) -> T;
     fn operator*(this const& self, other: const& T) -> T;
@@ -23,12 +23,12 @@ ruleset Numeric<T> {
 }
 
 /// Custom cleanup hook for non-trivial types
-ruleset Droppable {
+pub ruleset Droppable {
     fn drop(this &self);
 }
 
 /// Custom heap or memory space allocator capability
-ruleset Allocator {
+pub ruleset Allocator {
     fn allocate(this &self, bytes: usize, alignment: usize) -> *u8;
     fn deallocate(this &self, ptr:*u8, bytes: usize, alignment: usize);
 }

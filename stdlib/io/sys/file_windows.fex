@@ -1,0 +1,9 @@
+module std::io::sys_file;
+#import ffi;
+
+@target(os = "windows")
+pub fn stdout_write(buf: const*u8, len: usize) {
+    var out_h = win32_ffi::GetStdHandle(0xFFFFFFF5); // STD_OUTPUT_HANDLE
+    var written: u32 = 0;
+    win32_ffi::WriteFile(out_h, buf, len as u32, &written, 0 as*void);
+}

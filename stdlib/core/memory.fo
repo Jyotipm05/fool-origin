@@ -1,17 +1,17 @@
 module std::core;
 
-class RawMemory {
-    fn copy(dest: *u8, src: const* u8, bytes: usize);
-    fn set(dest: *u8, value: u8, bytes: usize);
+pub class RawMemory {
+    pub fn copy(dest: *u8, src: const* u8, bytes: usize);
+    pub fn set(dest: *u8, value: u8, bytes: usize);
 }
 
-class ArenaAllocator {
-    buffer: *u8;
-    capacity: usize;
-    offset: usize;
+pub class ArenaAllocator {
+    pub buffer: *u8;
+    pub capacity: usize;
+    pub offset: usize;
 
-    fn create(capacity: usize) -> ArenaAllocator;
-    fn allocate(this &self, bytes: usize, align: usize = 8) -> *u8;
-    fn reset(this &self);
-    fn destroy(this self);
+    pub fn create(capacity: usize) -> ArenaAllocator;
+    pub fn allocate(this &self, bytes: usize, align: usize = 8) -> *u8;
+    pub fn reset(this &self);
+    pub fn destroy(this self);
 }

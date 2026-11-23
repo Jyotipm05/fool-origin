@@ -1,5 +1,5 @@
 module std::io;
-#import std::io::win32_ffi;
+#import @std:io:sys:ffi;
 
 fn File::open(path: StringView, mode: FileMode) -> File {
     var access = 0x80000000; // GENERIC_READ

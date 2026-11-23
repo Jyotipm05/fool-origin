@@ -127,6 +127,28 @@ if (BUILD_TESTING)
     add_project_test(foolc_project_import_type_mismatch import_type_mismatch
                      "cannot convert 'i64' to 'i32'.*argument 'scale' of call to 'geometry::dot'" "project;negative")
 
+    # Visibility: `pub`, the privacy unit (same-stem files), and namespaces across files.
+    add_project_test(foolc_project_vis_ok vis_ok "3 module.s. from 5 file.s.*, 0 error" "project;positive")
+    add_project_test(foolc_project_vis_private_function vis_private "function 'internal_helper' is private to 'lib.fo'" "project;negative")
+    add_project_test(foolc_project_vis_private_other_file vis_private "other.fl:[0-9]+:[0-9]+: error: function 'internal_helper' is private" "project;negative")
+    add_project_test(foolc_project_vis_private_field vis_private "field 'closed' of 'Box' is private to 'lib.fo'; declare it `pub` inside the class" "project;negative")
+    add_project_test(foolc_project_vis_private_method vis_private "method 'Box::peek' is private to 'lib.fo'" "project;negative")
+    add_project_test(foolc_project_vis_private_constant vis_private "constant 'HIDDEN_CONST' is private to 'lib.fo'" "project;negative")
+    add_project_test(foolc_project_vis_private_type vis_private "type 'Hidden' is private to 'lib.fo'" "project;negative")
+    add_project_test(foolc_project_vis_private_namespace vis_private "function 'closed_ns::g' is private to 'lib.fo'" "project;negative")
+    add_project_test(foolc_project_vis_note vis_private "note: 'internal_helper' is declared here without `pub`" "project;negative")
+
+    # Path imports: roots (@src, @lib, @sup, @std, relative), `{a, b} from`, `pub #import`, files loaded on demand.
+    add_project_test(foolc_project_import_forms import_forms "checked [0-9]+ module.s. from [0-9]+ file.s. for linux-x86_64 .0 instantiation.s.., 0 error" "project;positive")
+    add_project_test(foolc_project_import_lazy lazy/app "2 module.s. from 2 file.s.*, 0 error" "project;positive")
+    add_project_test(foolc_project_import_missing_name import_names "'nothing' is not declared in 'math'" "project;negative")
+    add_project_test(foolc_project_import_private_name import_names "'hidden' is private to 'math.fl'" "project;negative")
+    add_project_test(foolc_project_import_not_selected import_names "main.fl:8:[0-9]+: error: .*'mul'" "project;negative")
+    add_project_test(foolc_project_import_reexport_narrowed import_names "reexport.fl:[0-9]+:[0-9]+: error: .*'whisper'" "project;negative")
+    add_project_test(foolc_project_import_no_package import_errors "package 'nothere' is not installed" "project;negative")
+    add_project_test(foolc_project_import_no_file import_errors "unresolved import 'nowhere:file': no file or folder '[^']*nowhere/file'" "project;negative")
+    add_project_test(foolc_project_import_drive import_errors "unresolved import ':z:nothing': no file or folder 'Z:/nothing'" "project;negative")
+
     # 3. Per-file parse + local checks for every example and stdlib file.
     file(GLOB_RECURSE FOOL_SOURCE_FILES
         LIST_DIRECTORIES false

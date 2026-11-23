@@ -1,5 +1,5 @@
 module std::math;
-#import std::math::simd_ffi;
+#import @std:math:sys:ffi;
 
 // Vectorized SIMD specialized branch monomorphization
 fn Math<SIMD = true>::dot_product(a: const*f32, b: const* f32, length: usize) -> f32 {

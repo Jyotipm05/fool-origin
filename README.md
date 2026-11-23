@@ -42,6 +42,10 @@ Fool replaces legacy C/C++ header files and monolithic source translation units 
 | **`.fl`** | **Implementation Unit** | Pure Fool algorithmic logic, method bodies, and state machine step transitions. | Declares `module <name>;`. **Never self-imports its companion `.fo`**. External `#import` allowed. |
 | **`.fex`** | **External / Platform Overlay** | Foreign ABI bindings (`@extern("C")`, `@extern("llvm")`), kernel syscalls, and target-specific overrides. | Gated by `@target(os = "...", arch = "...")`. Merged in Pass 0. |
 
+Declarations are private to their file unless written `pub` (files sharing a name stem, such as `store.fo`, `store.fl` and
+`store_linux.fex`, count as one file); members of a class are public only when marked `pub` inside the class, and
+`pub namespace n { ... }` makes everything in it public. See [`docs/language.md`](docs/language.md).
+
 Pairing every `.fo` with a `.fl` is the preferred layout but not required: a `.fo` on its own is a valid, complete module
 (types, constants and signatures whose implementation lives elsewhere), and importers type-check their calls against it.
 (`tests/project/interface_only`, and `stdlib/core/rulesets.fo` / `stdlib/sys/*.fo` in the standard library.)
@@ -379,7 +383,7 @@ fn func1() {
 **Consumer Import Sites:**
 ```fool
 // 1. With explicit compile-time overrides:
-#import name1<ASIO_IOURING_ON = 1>;
+#import name1<ASIO_IOURING_ON = 1>;   // a path: the file `name1` (or folder) next to this one
 
 // 2. Or using the module's default values:
 #import name1;

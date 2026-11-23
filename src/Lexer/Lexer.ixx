@@ -38,6 +38,8 @@ enum class TokenKind : uint16_t {
     // Keywords
     KwImport,        ///< 'import'
     KwModule,        ///< 'module'
+    KwPub,           ///< 'pub'
+    KwNamespace,     ///< 'namespace'
     KwClass,         ///< 'class'
     KwRuleset,       ///< 'ruleset'
     KwBlueprint,     ///< 'blueprint'
