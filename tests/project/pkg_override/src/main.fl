@@ -1,0 +1,7 @@
+module pk::override_app;
+
+#import @pack:tools:calc;
+
+fn run() -> i32 {
+    return calc_value();
+}

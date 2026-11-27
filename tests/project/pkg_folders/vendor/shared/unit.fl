@@ -1,0 +1,3 @@
+module pk::unit;
+
+pub fn unit() -> i32 { return 1; }

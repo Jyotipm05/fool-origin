@@ -1,0 +1,67 @@
+// `match` on an enum: arms name variants, bind the payload and may end with `_`.
+
+module tests::match_ok;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Token {
+    Number(i64),
+    Word(i32, i32),
+    End,
+}
+
+fn describe(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(radius) => {
+            return radius * 2.0;
+        }
+        Shape::Rect(w, h) => {
+            const area: f64 = w * h;      // payload names are ordinary read-only locals
+            return area;
+        }
+        Shape::Empty => {
+            return 0.0;
+        }
+    }
+}
+
+fn first_number(token: Token) -> i64 {
+    var out: i64 = 0;
+    match token {
+        Token::Number(n) => { out = n; }
+        Token::Word(_, length) => { out = 7; }
+        _ => { out = -1; }                    // `_` covers End
+    }
+    return out;
+}
+
+fn payload_ignored(shape: Shape) -> i32 {
+    match shape {
+        Shape::Circle => { return 1; }        // no parentheses: the payload is not named
+        Shape::Rect(_, _) => { return 2; }
+        Shape::Empty => { return 3; }
+    }
+}
+
+fn shadowing(shape: Shape) -> f64 {
+    const radius: f64 = 1.0;
+    match shape {
+        Shape::Circle(radius) => { return radius; }   // the arm's name hides the outer one
+        _ => { return radius; }
+    }
+}
+
+fn in_loop(shapes: i32, shape: Shape) -> i32 {
+    var count = 0;
+    for (var i: i32 = 0; i < shapes; i = i + 1) {
+        match shape {
+            Shape::Empty => { continue; }
+            _ => { count = count + 1; }
+        }
+    }
+    return count;
+}

@@ -33,6 +33,7 @@ import fool.diagnostics;
 import fool.lexer;
 import fool.ast;
 import fool.bmi;
+import fool.manifest;
 
 export namespace fool {
 
@@ -358,6 +359,7 @@ class ModuleGraphPass1 {
     std::set<std::string> m_loaded;                        ///< normalized paths of those files
     std::map<const ImportDeclNode*, ResolvedImport> m_resolved;
     std::filesystem::path m_std_root{"stdlib"};            ///< what `@std:` means
+    mutable std::map<std::string, Manifest> m_manifests;   ///< `fool.toml` / `overwrite.toml` of each project folder, loaded on first use
     size_t m_indexed_files{0};
     BMICacheManager* m_cache{nullptr};   ///< optional `.flbmi` cache used instead of re-parsing unchanged files
 
@@ -381,6 +383,8 @@ public:
     bool resolve_imports();
     /// The modules and files an import resolved to (null before `resolve_imports`, or when it did not resolve).
     [[nodiscard]] const ResolvedImport* resolved_import(const ImportDeclNode* decl) const;
+    /// A report of the projects behind the search paths: their manifests, folders, collections and where each dependency resolves.
+    [[nodiscard]] std::string describe_projects() const;
     /// Orders modules so dependencies come first; reports import cycles.
     bool sort_topological();
 
@@ -399,6 +403,14 @@ private:
     bool load_from_disk(const std::filesystem::path& base);
     /// The project root for a file: the folder with `fool.toml` above it, else the search root holding it.
     [[nodiscard]] std::filesystem::path project_root(const std::filesystem::path& file) const;
+    /// The nearest folder holding `fool.toml` at or above `dir`, written the way `dir` is (empty when there is none).
+    [[nodiscard]] std::filesystem::path find_manifest_dir(const std::filesystem::path& dir) const;
+    /// The manifest of the project in `dir` (defaults when it has no `fool.toml`); loaded once, so its problems are reported once.
+    [[nodiscard]] const Manifest& manifest_for(const std::filesystem::path& dir) const;
+    /// The projects behind the search paths, each once.
+    [[nodiscard]] std::vector<std::filesystem::path> workspace_projects() const;
+    /// Where the package `name` is, for an import in `from`: the importing file's project first, then the workspace projects.
+    [[nodiscard]] PackageLocation find_package(std::string_view name, const std::filesystem::path& from) const;
 };
 
 // =============================================================================================
@@ -558,6 +570,8 @@ private:
     void check_statement(const StmtNode* stmt);
     void check_var_decl(const VarDeclNode* var);
     void check_block_scoped(const BlockStmt* block);
+    /// `match`: the arms name variants of one enum, bind its payload, and must cover every variant (or end with `_`).
+    void check_match(const MatchStmt* match);
     [[nodiscard]] bool always_returns(const std::vector<StmtNode*>& stmts) const;
     [[nodiscard]] bool stmt_always_returns(const StmtNode* stmt) const;
     [[nodiscard]] bool stmt_always_exits(const StmtNode* stmt) const;   ///< returns, breaks, continues or calls a `-> !` function

@@ -1,0 +1,7 @@
+module pk::chain;
+
+#import @pack:outer:wrap;
+
+fn run() -> i32 {
+    return wrapped();
+}

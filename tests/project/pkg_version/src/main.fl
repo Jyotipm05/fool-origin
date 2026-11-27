@@ -1,0 +1,5 @@
+module pk::ver;
+
+#import @pack:shapes:area;
+
+fn run() -> i32 { return square_area(1); }

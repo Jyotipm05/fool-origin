@@ -15,6 +15,7 @@ module;
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <set>
 #include <sstream>
@@ -26,6 +27,7 @@ module;
 module fool.sema;
 
 import fool.lexer;
+import fool.manifest;
 import fool.parser;
 
 namespace fool {
@@ -33,6 +35,14 @@ namespace fool {
 namespace {
 
 std::string_view text_of(SymbolID id) { return StringInterner::get().resolve(id); }
+
+/// The same folder written differently (relative, absolute, with `..`) gets the same key.
+std::string folder_key(const std::filesystem::path& dir) {
+    std::error_code ec;
+    std::filesystem::path absolute = std::filesystem::absolute(dir.empty() ? std::filesystem::path(".") : dir, ec).lexically_normal();
+    if (absolute.filename().empty() && absolute.has_parent_path() && absolute != absolute.parent_path()) absolute = absolute.parent_path();
+    return absolute.generic_string();
+}
 
 bool role_for_extension(const std::filesystem::path& path, FileRole& role) {
     std::string ext = path.extension().string();
@@ -63,11 +73,22 @@ void ModuleGraphPass1::add_search_path(const std::filesystem::path& path) {
 }
 
 void ModuleGraphPass1::index_search_paths() {
+    // Installed packages are not part of the project: they are loaded when something imports them, not indexed up front.
+    std::set<std::string> installed;
+    for (const std::filesystem::path& project : workspace_projects()) {
+        installed.insert(folder_key(manifest_for(project).packages_dir()));   // also reports manifest problems up front
+    }
     std::vector<std::filesystem::path> files;
     for (const auto& root : m_search_paths) {
         std::error_code ec;
         if (!std::filesystem::is_directory(root, ec)) continue;
-        for (const auto& entry : std::filesystem::recursive_directory_iterator(root, ec)) {
+        std::filesystem::recursive_directory_iterator it(root, ec);
+        for (const std::filesystem::recursive_directory_iterator end; it != end; it.increment(ec)) {
+            const auto& entry = *it;
+            if (entry.is_directory(ec)) {
+                if (installed.count(folder_key(entry.path())) != 0) it.disable_recursion_pending();
+                continue;
+            }
             FileRole role;
             if (entry.is_regular_file() && role_for_extension(entry.path(), role) && m_target.file_applies(entry.path())) {
                 files.push_back(entry.path());
@@ -140,14 +161,33 @@ void ModuleGraphPass1::add_source_file(const std::filesystem::path& path) {
     }
 }
 
+std::filesystem::path ModuleGraphPass1::find_manifest_dir(const std::filesystem::path& start) const {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    auto trimmed = [](fs::path p) {
+        p = p.lexically_normal();
+        if (p == ".") p.clear();
+        if (!p.empty() && p.filename().empty() && p != p.parent_path()) p = p.parent_path();
+        return p;
+    };
+    // `relative` climbs in step with `absolute`, so the result is written the way `start` was (files are matched by path).
+    fs::path relative = trimmed(start);
+    fs::path absolute = trimmed(fs::absolute(relative.empty() ? fs::path(".") : relative, ec));
+    for (;;) {
+        if (fs::exists(absolute / "fool.toml", ec)) return relative.empty() ? fs::path(".") : relative;
+        if (absolute == absolute.parent_path()) return {};
+        absolute = absolute.parent_path();
+        if (relative.is_absolute()) relative = relative.parent_path();
+        else if (relative.empty() || relative.filename() == "..") relative /= "..";
+        else relative = relative.parent_path();
+    }
+}
+
 std::filesystem::path ModuleGraphPass1::project_root(const std::filesystem::path& file) const {
     namespace fs = std::filesystem;
     const fs::path normal = file.lexically_normal();
-    for (fs::path dir = normal.parent_path(); !dir.empty(); dir = dir.parent_path()) {
-        std::error_code ec;
-        if (fs::exists(dir / "fool.toml", ec)) return dir;
-        if (dir == dir.parent_path()) break;
-    }
+    const fs::path manifest_dir = find_manifest_dir(normal.parent_path());
+    if (!manifest_dir.empty()) return manifest_dir;
     const std::string text = normal.generic_string();
     for (const fs::path& root : m_search_paths) {
         const std::string prefix = root.lexically_normal().generic_string();
@@ -156,39 +196,102 @@ std::filesystem::path ModuleGraphPass1::project_root(const std::filesystem::path
     return normal.parent_path();
 }
 
+const Manifest& ModuleGraphPass1::manifest_for(const std::filesystem::path& dir) const {
+    const std::string key = folder_key(dir);
+    auto it = m_manifests.find(key);
+    if (it == m_manifests.end()) it = m_manifests.emplace(key, load_manifest(dir, m_diag)).first;
+    return it->second;
+}
+
+std::vector<std::filesystem::path> ModuleGraphPass1::workspace_projects() const {
+    std::vector<std::filesystem::path> projects;
+    std::set<std::string> seen;
+    for (const std::filesystem::path& root : m_search_paths) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(root, ec)) continue;
+        std::filesystem::path dir = find_manifest_dir(root);
+        if (dir.empty()) dir = root;
+        if (seen.insert(folder_key(dir)).second) projects.push_back(dir);
+    }
+    return projects;
+}
+
+PackageLocation ModuleGraphPass1::find_package(std::string_view name, const std::filesystem::path& from) const {
+    std::vector<const Manifest*> projects;
+    std::set<std::string> seen;
+    auto add = [&](const std::filesystem::path& dir) {
+        if (seen.insert(folder_key(dir)).second) projects.push_back(&manifest_for(dir));
+    };
+    add(project_root(from));
+    for (const std::filesystem::path& dir : workspace_projects()) add(dir);
+    return locate_package(name, projects, [this](const std::filesystem::path& dir) -> const Manifest& { return manifest_for(dir); });
+}
+
+std::string ModuleGraphPass1::describe_projects() const {
+    std::ostringstream out;
+    for (const std::filesystem::path& dir : workspace_projects()) {
+        const Manifest& manifest = manifest_for(dir);
+        out << "project " << (manifest.m_name.empty() ? "(unnamed)" : manifest.m_name);
+        if (!manifest.m_version.empty()) out << " " << manifest.m_version;
+        out << " (" << dir.generic_string() << ")\n";
+        out << "  fool.toml:      " << (manifest.m_has_manifest ? "found" : "none") << "\n";
+        out << "  overwrite.toml: " << (manifest.m_has_overwrite ? "found" : "none") << "\n";
+        out << "  src: " << manifest.m_src << ", lib: " << manifest.m_lib << "\n";
+        out << "  packages: " << manifest.packages_dir().lexically_normal().generic_string() << "\n";
+        if (!manifest.m_collections.empty()) {
+            out << "  collections:\n";
+            for (const std::filesystem::path& collection : manifest.m_collections) out << "    " << collection.generic_string() << "\n";
+        }
+        if (manifest.m_dependencies.empty()) continue;
+        out << "  dependencies:\n";
+        for (const Dependency& dependency : manifest.m_dependencies) {
+            out << "    " << dependency.m_name;
+            if (!dependency.m_version.empty()) out << " " << dependency.m_version;
+            const PackageLocation found = find_package(dependency.m_name, dir / "fool.toml");
+            if (found.m_root.empty()) out << " -> not found: " << found.m_error << "\n";
+            else out << " -> " << found.m_root.generic_string() << "\n";
+        }
+    }
+    return out.str();
+}
+
 std::filesystem::path ModuleGraphPass1::import_base(const ImportDeclNode& imp, const std::filesystem::path& from,
                                                     std::string& error) const {
     namespace fs = std::filesystem;
     const fs::path dir = from.lexically_normal().parent_path();
     fs::path base;
-    // The nearest enclosing folder called `name` (`src`, `lib`), else `<project root>/name`, else the project root.
-    auto anchored = [&](const char* name) {
-        for (fs::path p = dir; !p.empty(); p = p.parent_path()) {
-            if (p.filename() == name) return p;
-            if (p == p.parent_path()) break;
-        }
+    // The nearest enclosing folder called `name` (`src`, `lib` unless fool.toml renames them), else `<project root>/name`, else the project root.
+    auto anchored = [&](bool source) {
         const fs::path root = project_root(from);
+        const Manifest& manifest = manifest_for(root);
+        const std::string& name = source ? manifest.m_src : manifest.m_lib;
+        if (name.find('/') == std::string::npos && name.find('\\') == std::string::npos) {
+            for (fs::path p = dir; !p.empty(); p = p.parent_path()) {
+                if (p.filename() == name) return p;
+                if (p == p.parent_path()) break;
+            }
+        }
         std::error_code ec;
         return fs::is_directory(root / name, ec) ? root / name : root;
     };
     switch (imp.m_root) {
         case ImportRoot::Relative: base = dir; break;
         case ImportRoot::Std: base = m_std_root; break;
-        case ImportRoot::Src: base = anchored("src"); break;
-        case ImportRoot::Lib: base = anchored("lib"); break;
+        case ImportRoot::Src: base = anchored(true); break;
+        case ImportRoot::Lib: base = anchored(false); break;
         case ImportRoot::Sup:
             base = dir;
             for (uint32_t i = 0; i < imp.m_up; ++i) base /= "..";
             break;
         case ImportRoot::Pack: {
-            const fs::path package = project_root(from) / "packages" / std::string(text_of(imp.m_pack));
-            std::error_code ec;
-            if (!fs::is_directory(package, ec)) {
-                error = "package '" + std::string(text_of(imp.m_pack)) + "' is not installed (expected in '" +
-                        package.generic_string() + "')";
+            const PackageLocation found = find_package(text_of(imp.m_pack), from);
+            if (found.m_root.empty()) {
+                error = found.m_error;
                 return {};
             }
-            base = fs::is_directory(package / "lib", ec) ? package / "lib" : package;
+            std::error_code ec;
+            const fs::path lib = found.m_root / manifest_for(found.m_root).m_lib;
+            base = fs::is_directory(lib, ec) ? lib : found.m_root;
             break;
         }
         case ImportRoot::Drive: {

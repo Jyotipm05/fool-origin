@@ -786,6 +786,7 @@ void Parser::synchronize_statement() {
             case TokenKind::KwConstx:
             case TokenKind::KwIf:
             case TokenKind::KwWhile:
+            case TokenKind::KwMatch:
             case TokenKind::KwFor:
             case TokenKind::KwBreak:
             case TokenKind::KwContinue:
@@ -860,6 +861,71 @@ StmtNode* Parser::parse_while() {
     }
     stmt->m_body = parse_block();
     if (stmt->m_body == nullptr) return nullptr;
+    stmt->m_span = span_from(start);
+    return stmt;
+}
+
+StmtNode* Parser::parse_match() {
+    SourceLocation start = current().m_span.m_start;
+    advance(); // 'match'
+    auto* stmt = m_arena.create<MatchStmt>();
+
+    bool saved = m_no_struct_literal;
+    m_no_struct_literal = true;
+    stmt->m_subject = parse_expression();
+    m_no_struct_literal = saved;
+    if (stmt->m_subject == nullptr) {
+        synchronize_statement();
+        return nullptr;
+    }
+    if (!check(TokenKind::OpenBrace)) {
+        error_here("Expected '{' after the value of 'match', found '" + describe(current()) + "'");
+        synchronize_statement();
+        return nullptr;
+    }
+    advance();
+
+    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+        MatchArm arm;
+        const SourceLocation arm_start = current().m_span.m_start;
+        if (check(TokenKind::Identifier) && current().m_raw_lexeme == "_" && peek().m_kind == TokenKind::FatArrow) {
+            advance();
+            arm.m_wildcard = true;
+        } else {
+            // `Enum::Variant` with an optional `(a, b, _)`
+            while (true) {
+                Token segment = consume(TokenKind::Identifier, "Expected a variant like 'Shape::Circle' or '_' as a match pattern");
+                if (segment.m_kind != TokenKind::Identifier) { synchronize_statement(); return nullptr; }
+                arm.m_path.push_back(segment.symbol_id());
+                if (!match(TokenKind::DoubleColon)) break;
+            }
+            if (arm.m_path.size() != 2) {
+                error(span_from(arm_start), "A match pattern names a variant as 'Enum::Variant'");
+            }
+            if (match(TokenKind::OpenParen)) {
+                arm.m_has_bindings = true;
+                while (!check(TokenKind::CloseParen) && !is_at_end()) {
+                    MatchBinding binding;
+                    binding.m_span = current().m_span;
+                    Token name = consume(TokenKind::Identifier, "Expected a name for the payload value (or '_')");
+                    if (name.m_kind != TokenKind::Identifier) { synchronize_statement(); return nullptr; }
+                    binding.m_name = name.symbol_id();
+                    binding.m_ignored = name.m_raw_lexeme == "_";
+                    arm.m_bindings.push_back(binding);
+                    if (!match(TokenKind::Comma)) break;
+                }
+                consume(TokenKind::CloseParen, "Expected ')' after the payload names");
+            }
+        }
+        consume(TokenKind::FatArrow, "Expected '=>' after the match pattern");
+        arm.m_body = parse_block();
+        if (arm.m_body == nullptr) { synchronize_statement(); return nullptr; }
+        arm.m_span = span_from(arm_start);
+        stmt->m_arms.push_back(std::move(arm));
+        match(TokenKind::Comma);   // an optional comma between arms
+    }
+    consume(TokenKind::CloseBrace, "Expected '}' to close 'match'");
+    if (stmt->m_arms.empty()) error(span_from(start), "A 'match' needs at least one arm");
     stmt->m_span = span_from(start);
     return stmt;
 }
@@ -1000,6 +1066,8 @@ StmtNode* Parser::parse_statement() {
             return parse_if();
         case TokenKind::KwWhile:
             return parse_while();
+        case TokenKind::KwMatch:
+            return parse_match();
         case TokenKind::KwFor:
             return parse_for();
         case TokenKind::KwBreak:

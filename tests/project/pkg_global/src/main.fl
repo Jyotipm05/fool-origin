@@ -1,0 +1,8 @@
+module pk::both;
+
+#import @pack:mathx:ops;            // found in the shared collection
+#import @pack:localtool:util;       // found in ./packages
+
+fn run() -> i32 {
+    return double(4) + triple(2) + tool_value();
+}

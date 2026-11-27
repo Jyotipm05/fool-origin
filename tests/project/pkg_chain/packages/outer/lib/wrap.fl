@@ -1,0 +1,5 @@
+module outer::wrap;
+
+#import @pack:inner:core_value;
+
+pub fn wrapped() -> i32 { return inner_value() + 1; }

@@ -51,6 +51,7 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::KwNull: return "null";
         case TokenKind::KwAs: return "as";
         case TokenKind::KwWhile: return "while";
+        case TokenKind::KwMatch: return "match";
         case TokenKind::KwStruct: return "struct";
         case TokenKind::KwBreak: return "break";
         case TokenKind::KwContinue: return "continue";
@@ -72,6 +73,7 @@ const char* token_kind_to_str(TokenKind kind) {
         case TokenKind::Dot: return ".";
         case TokenKind::DotDot: return "..";
         case TokenKind::Arrow: return "->";
+        case TokenKind::FatArrow: return "=>";
         case TokenKind::Equal: return "=";
         case TokenKind::EqualEqual: return "==";
         case TokenKind::ExclaimEqual: return "!=";
@@ -201,6 +203,7 @@ TokenKind Lexer::classify_keyword(std::string_view text) {
     if (text == "null")      return TokenKind::KwNull;
     if (text == "as")        return TokenKind::KwAs;
     if (text == "while")     return TokenKind::KwWhile;
+    if (text == "match")     return TokenKind::KwMatch;
     if (text == "struct")    return TokenKind::KwStruct;
     if (text == "break")     return TokenKind::KwBreak;
     if (text == "continue")  return TokenKind::KwContinue;
@@ -310,7 +313,9 @@ Token Lexer::next_token() {
         }
         case '.': return make_token(match('.') ? TokenKind::DotDot : TokenKind::Dot, start);
         case '-': return make_token(match('>') ? TokenKind::Arrow : TokenKind::Minus, start);
-        case '=': return make_token(match('=') ? TokenKind::EqualEqual : TokenKind::Equal, start);
+        case '=':
+            if (match('>')) return make_token(TokenKind::FatArrow, start);
+            return make_token(match('=') ? TokenKind::EqualEqual : TokenKind::Equal, start);
         case '!': return make_token(match('=') ? TokenKind::ExclaimEqual : TokenKind::Bang, start);
         case '<': return make_token(match('=') ? TokenKind::LessEqual : TokenKind::Less, start);
         case '>': return make_token(match('=') ? TokenKind::GreaterEqual : TokenKind::Greater, start);

@@ -1,0 +1,7 @@
+module pk::app;
+
+#import @pack:shapes:area;          // packages/shapes/lib/area
+
+fn run() -> i32 {
+    return square_area(3) + rect_area(2, 5);
+}

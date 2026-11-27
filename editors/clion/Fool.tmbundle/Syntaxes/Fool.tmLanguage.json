@@ -166,7 +166,7 @@
         },
         {
           "name": "keyword.control.flow.fool",
-          "match": "\\b(return|if|else|for|in)\\b"
+          "match": "\\b(return|if|else|for|in|while|match|break|continue)\\b"
         },
         {
           "name": "storage.modifier.ref.fool",

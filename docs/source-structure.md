@@ -70,11 +70,14 @@ src/
 │   ├── MIR.ixx               module fool.mir: Place, Operand, Rvalue, Statement, Terminator, Block, Function, Module
 │   ├── MIR.cpp               the `--dump-mir` printer, the verifier, `--mir-selftest`
 │   └── Build.cpp             the Builder: HIR -> blocks (control flow, evaluation order, places)
-├── Module/                   module fool.bmi: the `.flbmi` cache
+├── Module/                   modules fool.bmi (the `.flbmi` cache), fool.toml, fool.manifest
 │   ├── BMICache.ixx / .cpp   Sha256, BMICacheManager, key and file layout, BMI_FORMAT_VERSION
 │   ├── BMICodec.cpp          lossless binary encoding of the AST (one case per node type)
 │   ├── BMISelfTest.cpp       `--bmi-selftest`
-│   └── Sha256.cpp
+│   ├── Sha256.cpp
+│   ├── Toml.ixx / .cpp       module fool.toml: the TOML reader (tables, strings, numbers, arrays, inline tables), `merge`
+│   ├── TomlSelfTest.cpp      `--toml-selftest`
+│   └── Manifest.ixx / .cpp   module fool.manifest: `fool.toml` + `overwrite.toml` -> Manifest, `locate_package`
 └── Codegen/ …                placeholders (see §9)
 
 stdlib/       the standard library in Fool: core, io, sync, async, net, math, sys (.fo/.fl/.fex triads)
@@ -119,6 +122,10 @@ folder), which names a same-stem unit or else a folder (`match_files`). Files no
 (`load_from_disk`) and their imports followed. The files' module sections are the dependency edges, and the result
 (`ResolvedImport`: module plus the privacy units the path covered) is what Pass 0 filters its views with. It also validates
 template arguments, reports unresolved, self and cyclic imports, and produces the compilation order.
+The project root of a file is the nearest folder with a `fool.toml` (`find_manifest_dir`); `manifest_for` loads that
+folder's `fool.toml` + `overwrite.toml` once (`Manifest`), which renames `@src`/`@lib` and drives `@pack:` through
+`find_package` (the importing file's project first, then the project of every `-I` root; see `locate_package`). The
+recursive indexing of a search root skips each project's `packages` folder, so installed packages load only when imported.
 Pass 0 turns each resolved target into an `ImportedModule` view (files covered, `{names}` selected, `pub` re-export);
 every `find_*` lookup walks the views, so a name that was not imported is simply not found.
 
@@ -159,10 +166,12 @@ projections. Blocks that nothing reaches (the code after a `return`) are removed
 | `fool.hir` | `HIR/` | `Type`, `TypeTable`, `Expr`, `Stmt`, `Function`, `Module`, `lower_module`, `dump` |
 | `fool.mir` | `MIR/` | `Place`, `Operand`, `Rvalue`, `Statement`, `Terminator`, `Block`, `Function`, `Module`, `lower`, `verify`, `dump` |
 | `fool.bmi` | `Module/` | `Sha256`, `BMICacheManager`, the codec |
+| `fool.toml` | `Module/Toml.*` | `toml::Value`, `parse`, `merge` |
+| `fool.manifest` | `Module/Manifest.*` | `Manifest`, `load_manifest`, `locate_package`, `version_matches` |
 
 Dependency order, each importing only what is above it: `common` → `diagnostics` → `lexer` → `ast` → `parser`;
 `sema` uses `ast` and `parser`; `borrow` and `hir` use `sema`; `mir` uses `hir` (it never looks at the AST or the checker
-again); `bmi` uses `parser` and `ast`; `main.cpp` uses all.
+again); `bmi` uses `parser` and `ast`; `manifest` uses `toml` and `diagnostics`, and `sema` uses `manifest`; `main.cpp` uses all.
 
 ---
 
@@ -211,9 +220,18 @@ library meant adding `pub` to every `.fo`; running the project check and followi
 Example: the `for (init; condition; step)` loop touched `ForStmt` (AST), `parse_for`, `StmtFor` in the codec (version 3 → 4),
 the checker's scope handling, `kill_assigned_in`, the borrow checker's `walk_loop`, and HIR's `For` statement.
 
+Example: `match` touched `KwMatch` / `FatArrow` (lexer), `MatchStmt` / `MatchArm` (AST), `parse_match`, `StmtMatch` in the codec
+(version 6 → 7), `check_match` (arms, payload bindings, exhaustiveness), `stmt_always_returns` / `stmt_always_exits` /
+`kill_assigned_in`, the borrow checker's `walk_statement`, HIR's `Match` statement (`MatchCase`), and in MIR the `Payload`
+projection and the `Switch` terminator (builder, block pruning and renumbering, printer, verifier and its selftest).
+
 ---
 
 ## 7. Tests
+
+Tests that expect foolc to reject something (`negative` project fixtures, `foolc_warn_werror_fails`) run through
+`tests/expect_failure.cmake`: it requires a plain non-zero exit and a matching message, then exits 0 itself, so they read as
+passes in ctest, CLion and CI (not as a failing command rescued by `PASS_REGULAR_EXPRESSION`).
 
 `ctest --test-dir <build> -j` runs everything; `-L <label>` selects a group. All fixtures are `.fl` files under `tests/`.
 
@@ -229,6 +247,7 @@ the checker's scope handling, `kill_assigned_in`, the borrow checker's `walk_loo
 | `tests/hir/` | `--dump-hir` golden files | `hir` |
 | `tests/mir/` | `--dump-mir` golden files; the verifier runs on each dump. Also `foolc_mir_selftest` and `foolc_mir_project` (every function of `stdlib/` + `examples/`) | `mir` |
 | `tests/project/` | multi-file module graphs (ok, cycle, unresolved, bad template, interface-only, ...) and visibility (`vis_ok`, `vis_private`: one run per expected message) | `project` |
+| `tests/project/pkg_*` | `fool.toml` / `overwrite.toml`: local and shared packages, overrides, renamed folders, version and git-source errors, broken manifests; run with `--show-packages`. Also `foolc_toml_selftest` (the TOML reader and version matching) | `packages` |
 | `tests/cache/` | the `.flbmi` cache cycle | `bmi` |
 
 Golden tests run through `tests/calls/run_golden.cmake`, which runs `foolc -q <flag> <file>` and compares the output with

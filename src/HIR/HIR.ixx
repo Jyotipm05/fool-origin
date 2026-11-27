@@ -125,7 +125,20 @@ enum class StmtKind : uint8_t {
     For,        ///< condition m_expr (none: loop until `break`), m_step runs after every iteration, also after `continue`; m_body
     Break,
     Continue,
-    Block       ///< m_body, a scope of its own
+    Block,      ///< m_body, a scope of its own
+    Match       ///< subject m_expr (an enum value); m_arms, each with its own scope
+};
+
+struct Stmt;
+
+/// One arm of a Match (HIR): the variant it handles (or everything else, for `_`) and the locals bound to the payload.
+struct MatchCase {
+    // 1. Member variables
+    bool m_wildcard{false};
+    size_t m_variant{0};                 ///< index into the enum's variants
+    std::vector<LocalId> m_bindings;     ///< one per payload value (NO_LOCAL for `_`); empty when the pattern named no payload
+    std::vector<Stmt> m_body;
+    SourceSpan m_span;
 };
 
 struct Stmt {
@@ -137,6 +150,7 @@ struct Stmt {
     std::unique_ptr<Expr> m_step;     ///< For: evaluated after the body and after `continue`; may be absent
     std::vector<Stmt> m_body;
     std::vector<Stmt> m_else;
+    std::vector<MatchCase> m_arms;    ///< Match
 };
 
 struct Local {

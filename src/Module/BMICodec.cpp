@@ -44,7 +44,7 @@ enum Tag : uint8_t {
     ExprNull = 0, ExprInt = 1, ExprFloat, ExprString, ExprBool, ExprIdent, ExprPath, ExprUnary, ExprBinary,
     ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral, ExprLambda,
     // statements
-    StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional,
+    StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional, StmtMatch,
     // declarations
     DeclCondBlock = 1, DeclImport, DeclVar, DeclFunction, DeclRuleset, DeclClass, DeclBlueprint, DeclEnum, DeclNamespace
 };
@@ -253,6 +253,15 @@ private:
             u8(StmtWhile); span(n->m_span); expr(n->m_condition); stmt(n->m_body);
         } else if (auto* n = dynamic_cast<const ForStmt*>(s)) {
             u8(StmtFor); span(n->m_span); stmt(n->m_init); expr(n->m_condition); expr(n->m_step); stmt(n->m_body);
+        } else if (auto* n = dynamic_cast<const MatchStmt*>(s)) {
+            u8(StmtMatch); span(n->m_span); expr(n->m_subject);
+            count(n->m_arms.size());
+            for (const MatchArm& arm : n->m_arms) {
+                syms(arm.m_path); boolean(arm.m_wildcard); boolean(arm.m_has_bindings);
+                count(arm.m_bindings.size());
+                for (const MatchBinding& binding : arm.m_bindings) { sym(binding.m_name); boolean(binding.m_ignored); span(binding.m_span); }
+                stmt(arm.m_body); span(arm.m_span);
+            }
         } else if (dynamic_cast<const BreakStmt*>(s) != nullptr) {
             u8(StmtBreak); span(s->m_span);
         } else if (dynamic_cast<const ContinueStmt*>(s) != nullptr) {
@@ -753,6 +762,30 @@ private:
             n->m_condition = expr();
             n->m_step = expr();
             n->m_body = block();
+            result = n;
+            break;
+        }
+        case StmtMatch: {
+            auto* n = m_arena.create<MatchStmt>();
+            n->m_subject = expr();
+            uint32_t arms = count(8);
+            for (uint32_t i = 0; i < arms && m_ok; ++i) {
+                MatchArm arm;
+                arm.m_path = syms();
+                arm.m_wildcard = boolean();
+                arm.m_has_bindings = boolean();
+                uint32_t bindings = count(8);
+                for (uint32_t j = 0; j < bindings && m_ok; ++j) {
+                    MatchBinding binding;
+                    binding.m_name = sym();
+                    binding.m_ignored = boolean();
+                    binding.m_span = span();
+                    arm.m_bindings.push_back(binding);
+                }
+                arm.m_body = block();
+                arm.m_span = span();
+                n->m_arms.push_back(std::move(arm));
+            }
             result = n;
             break;
         }

@@ -116,3 +116,7 @@ http-client.private.env.json
 build-*/
 .cache/
 .fool_cache/
+
+# personal package settings (see docs/language.md, "Projects and packages")
+overwrite.toml
+!tests/project/**/overwrite.toml

@@ -47,14 +47,16 @@ inline constexpr BlockId NO_BLOCK = static_cast<BlockId>(-1);
 enum class ProjectionKind : uint8_t {
     Deref,   ///< `*place`: the place holds a pointer or reference; the result is what it points to
     Field,   ///< `place.name`: m_index in declaration order; the place holds a class value
-    Index    ///< `place[local]`: the place holds a pointer; the result is the element m_local steps away
+    Index,   ///< `place[local]`: the place holds a pointer; the result is the element m_local steps away
+    Payload  ///< `place.Variant.slot`: the place holds an enum value; m_variant and m_index (the slot) pick one payload value of that variant
 };
 
 struct Projection {
     // 1. Member variables
     ProjectionKind m_kind{ProjectionKind::Deref};
     TypeId m_type{NO_TYPE};                  ///< the type after applying this projection
-    size_t m_index{0};                       ///< Field
+    size_t m_index{0};                       ///< Field: the field; Payload: the slot in the variant's payload
+    size_t m_variant{0};                     ///< Payload
     SymbolID m_name{INVALID_SYMBOL_ID};      ///< Field
     LocalId m_local{NO_LOCAL};               ///< Index: a local holding the index
 };
@@ -136,7 +138,15 @@ enum class TerminatorKind : uint8_t {
     Goto,          ///< m_target
     Branch,        ///< m_value is a bool: true -> m_target, false -> m_else
     Return,        ///< m_value when m_has_value
+    Switch,        ///< m_value is an enum value: the variant picks the case's target (m_cases); any other variant goes to m_else
     Unreachable    ///< control cannot get here (the end of a function whose every path returned)
+};
+
+/// One arm of a Switch: values holding this variant continue at m_target.
+struct SwitchCase {
+    // 1. Member variables
+    size_t m_variant{0};
+    BlockId m_target{NO_BLOCK};
 };
 
 struct Terminator {
@@ -147,6 +157,7 @@ struct Terminator {
     bool m_has_value{false};
     BlockId m_target{NO_BLOCK};
     BlockId m_else{NO_BLOCK};
+    std::vector<SwitchCase> m_cases;   ///< Switch
 };
 
 struct Block {
@@ -186,6 +197,7 @@ struct Module {
 
     // 2. Member functions
     [[nodiscard]] size_t lowered_count() const;
+    [[nodiscard]] const hir::EnumInfo* find_enum(SymbolID name) const;
 };
 
 /// Builds the control-flow graph of every function HIR lowered.

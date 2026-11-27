@@ -1,0 +1,3 @@
+module tools::calc;
+
+pub fn calc_value() -> i32 { return 11; }

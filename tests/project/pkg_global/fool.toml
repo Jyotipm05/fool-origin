@@ -1,0 +1,7 @@
+[package]
+name = "both-kinds"
+version = "0.1.0"
+
+[dependencies]
+mathx = "2"
+localtool = "*"

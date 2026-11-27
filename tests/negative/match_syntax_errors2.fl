@@ -1,0 +1,20 @@
+module tests::match_syntax_errors2;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn bare_name(shape: Shape) {
+    match shape {
+        // expect-error: A match pattern names a variant as 'Enum::Variant'
+        Empty => { }
+        _ => { }
+    }
+}
+
+fn no_arms(shape: Shape) {
+    // expect-error: A 'match' needs at least one arm
+    match shape {
+    }
+}

@@ -38,6 +38,7 @@ import fool.borrow;
 import fool.hir;
 import fool.mir;
 import fool.bmi;
+import fool.manifest;
 
 namespace {
 
@@ -50,6 +51,7 @@ struct Options {
     fs::path m_std_root{"stdlib"};
     bool m_project{false};
     bool m_graph{false};
+    bool m_show_packages{false};
     bool m_quiet{false};
     bool m_check_borrow{false};
     bool m_warn_shadow{false};
@@ -64,6 +66,7 @@ struct Options {
     fs::path m_cache_dir;
     bool m_bmi_roundtrip{false};
     bool m_bmi_selftest{false};
+    bool m_toml_selftest{false};
     /// Parse entry point shared by every mode; a default-constructed manager simply parses.
     std::shared_ptr<fool::BMICacheManager> m_cache{std::make_shared<fool::BMICacheManager>()};
 };
@@ -154,6 +157,7 @@ void print_usage() {
         "  -I <dir>               add a module search root (project mode)\n"
         "  --std-root <dir>       where '@std:' imports look (default: stdlib)\n"
         "  --graph                print the module compilation order (project mode)\n"
+        "  --show-packages        print each project's fool.toml settings and where its packages resolve (project mode)\n"
         "  --check-borrow         also run the opt-in borrow checker (aliasing XOR mutability)\n"
         "  --warn-shadow          warn when a declaration shadows one from an enclosing scope or a global\n"
         "  -Werror                treat warnings as errors\n"
@@ -166,6 +170,7 @@ void print_usage() {
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
+        "  --toml-selftest        run the built-in fool.toml reader and version-matching checks\n"
         "  --bmi-selftest         run the built-in cache checks (SHA-256, codec, corruption, disk); extra\n"
         "                         files given on the command line are used as codec samples\n"
         "  -q, --quiet            suppress the summary line\n"
@@ -399,6 +404,7 @@ int run_project_mode(const Options& options) {
     graph.set_std_root(options.m_std_root);
 
     graph.index_search_paths();
+    if (options.m_show_packages) std::cout << graph.describe_projects();
     bool graph_ok = !diag.has_errors();
     graph_ok = graph.resolve_imports() && graph_ok;
     graph_ok = graph.sort_topological() && graph_ok;
@@ -479,6 +485,8 @@ int main(const int argc, char** argv) {
             options.m_mir_selftest = true;
         } else if (arg == "--dump-mir") {
             options.m_dump_mir = true;
+        } else if (arg == "--show-packages") {
+            options.m_show_packages = true;
         } else if (arg == "--graph") {
             options.m_graph = true;
             options.m_project = true;
@@ -493,6 +501,8 @@ int main(const int argc, char** argv) {
             options.m_cache_dir = argv[++i];
         } else if (arg == "--bmi-roundtrip") {
             options.m_bmi_roundtrip = true;
+        } else if (arg == "--toml-selftest") {
+            options.m_toml_selftest = true;
         } else if (arg == "--bmi-selftest") {
             options.m_bmi_selftest = true;
         } else if (arg == "--check-borrow") {
@@ -513,6 +523,7 @@ int main(const int argc, char** argv) {
         std::cout << (failures.empty() ? "mir selftest: ok\n" : "mir selftest: FAILED\n");
         return failures.empty() ? 0 : 1;
     }
+    if (options.m_toml_selftest) return fool::run_manifest_selftest(std::cout) ? 0 : 1;
     if (options.m_bmi_selftest) return fool::run_bmi_selftest(std::cout, options.m_files) ? 0 : 1;
 
     if (options.m_use_cache || options.m_bmi_roundtrip) {

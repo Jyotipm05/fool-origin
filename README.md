@@ -558,8 +558,9 @@ an omitted condition means "until `break`":
 Enums that the lowered code mentions are listed first in the dump (`enum Shape { Circle(f64), Rect(f64, f64), Empty }`).
 A value is a `(variant Enum::Variant payload…)` expression whose payload values are converted to the declared payload
 types, and `==` / `!=` are defined for enums whose variants carry no payload (ordering and comparing payload enums are
-reported as not lowerable, since the language does not define them). The language has no `match` yet, so a payload can
-be built but not read back.
+reported as not lowerable, since the language does not define them). A payload is read back with `match`: the
+statement lowers to `match <value> { Enum::Variant(r#1, _) => { … } _ => { … } }`, each arm's names being locals of the
+variant's payload types.
 
 What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, generic enums, qualified paths other than enum variants, constant generic arguments, async functions, reflection
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
@@ -597,15 +598,17 @@ fn sum(data: const* f32, length: usize) -> f32 {
 ```
 
 - **Control flow is blocks and jumps.** `if`, `while`, `for`, `break`, `continue` and early `return` become `goto`,
-  `branch cond, then, else` and `return`. `&&` and `||` become a branch that writes a bool temporary, so the right operand
+  `branch cond, then, else` and `return`. A `match` is `switch value [Variant -> bb, …], else bb` on a temporary holding the
+  enum value; an arm copies its payload out with places such as `_4.Rect.1`, and when every variant has an arm the else
+  target is an `unreachable` block. `&&` and `||` become a branch that writes a bool temporary, so the right operand
   only runs when it must. Code after a `return`/`break`/`continue` is dropped.
 - **Evaluation order is explicit.** A compound expression is a sequence of statements writing temporaries (`_4`, printed as
   `_index`). A value read from a variable or memory is copied into a temporary first when a later operand makes a call, so
   `c.peek() + c.bump(5)` still reads the first operand before `bump` runs.
 - **Places.** An assignable location is a local or global plus projections: `(*p#0)` dereference, `.field`, `[i#3]` index
-  (the base is a pointer). Every projection records the type it produces.
+  (the base is a pointer), `.Variant.slot` payload of an enum value. Every projection records the type it produces.
 - **Statements and terminators.** `place = rvalue`, `eval rvalue` (a call whose result is dropped), then `goto`, `branch`,
-  `return` or `unreachable` (the end of a function whose every path returns). An rvalue is one of: a plain operand, a unary or
+  `switch`, `return` or `unreachable` (the end of a function whose every path returns). An rvalue is one of: a plain operand, a unary or
   binary operation, `convert`, `cast`, `&place`, `unwrap`, `wrap`, `new T {…}`, `variant Enum::V(…)` or `call f(…)`. There are
   no phi nodes: locals are mutable slots. Calls are ordinary rvalues because the language has no unwinding yet.
 - **Types are the HIR's.** The MIR carries a copy of the HIR type table, so a type id means the same in both.
@@ -730,6 +733,7 @@ If CMake picks the wrong scanner for Clang, pass it explicitly, e.g. `-DCMAKE_CX
 foolc                                   # project mode over stdlib/ and examples/
 foolc --project -I stdlib -I examples   # explicit search roots
 foolc --graph                           # also print the module compilation order
+foolc --show-packages                   # print each project's fool.toml settings and where its packages resolve
 foolc --check-borrow                    # additionally run the opt-in borrow checker
 foolc --warn-shadow -Werror             # warn about shadowing declarations; fail on any warning
 foolc --dump-types file.fl              # inferred type of every expression

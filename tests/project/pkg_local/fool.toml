@@ -1,0 +1,7 @@
+# A project that installs its packages into ./packages (the default).
+[package]
+name = "geometry-app"
+version = "0.3.0"
+
+[dependencies]
+shapes = "1"          # any 1.x

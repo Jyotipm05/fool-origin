@@ -824,6 +824,8 @@ private:
             out.push_back(std::move(s));
         } else if (const auto* if_stmt = dynamic_cast<const IfStmt*>(stmt)) {
             out.push_back(lower_if(if_stmt));
+        } else if (const auto* match_stmt = dynamic_cast<const MatchStmt*>(stmt)) {
+            out.push_back(lower_match(match_stmt));
         } else if (const auto* while_stmt = dynamic_cast<const WhileStmt*>(stmt)) {
             Stmt s = make_stmt(StmtKind::While, stmt->m_span);
             s.m_expr = as_condition(lower_expr(while_stmt->m_condition, bool_type()), while_stmt->m_condition->m_span);
@@ -893,6 +895,41 @@ private:
             scope.m_body.push_back(std::move(loop));
             out.push_back(std::move(scope));
         }
+    }
+
+    /// `match value { Enum::A(x) => {...} _ => {...} }`: each arm gets locals for the payload it names.
+    Stmt lower_match(const MatchStmt* match_stmt) {
+        Stmt s = make_stmt(StmtKind::Match, match_stmt->m_span);
+        s.m_expr = lower_expr(match_stmt->m_subject, NO_TYPE);
+        const Type& subject = ty(s.m_expr->m_type);
+        const EnumInfo* found = subject.m_kind == TypeKind::Named ? m_module.find_enum(subject.m_name) : nullptr;
+        if (found == nullptr) fail("a match on '" + m_module.m_types.text(s.m_expr->m_type) + "' (only non-generic enum values can be matched)", match_stmt->m_subject->m_span);
+        const EnumInfo info = *found;   // a copy: lowering an arm may register more enums
+        for (const MatchArm& arm : match_stmt->m_arms) {
+            MatchCase lowered;
+            lowered.m_span = arm.m_span;
+            push_scope();
+            if (arm.m_wildcard) {
+                lowered.m_wildcard = true;
+            } else {
+                bool known = false;
+                for (size_t i = 0; i < info.m_variants.size(); ++i) {
+                    if (info.m_variants[i].m_name == arm.m_path.back()) { lowered.m_variant = i; known = true; }
+                }
+                if (!known) fail("variant '" + name_of(arm.m_path.back()) + "' of '" + name_of(info.m_name) + "'", arm.m_span);
+                const EnumVariantInfo& variant = info.m_variants[lowered.m_variant];
+                if (arm.m_has_bindings && arm.m_bindings.size() == variant.m_payload.size()) {
+                    for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
+                        lowered.m_bindings.push_back(arm.m_bindings[i].m_ignored ? NO_LOCAL
+                                                                                 : declare(arm.m_bindings[i].m_name, variant.m_payload[i], false, false));
+                    }
+                }
+            }
+            lower_scoped(arm.m_body, lowered.m_body);
+            pop_scope();
+            s.m_arms.push_back(std::move(lowered));
+        }
+        return s;
     }
 
     Stmt lower_if(const IfStmt* if_stmt) {

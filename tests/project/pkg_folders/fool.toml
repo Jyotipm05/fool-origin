@@ -1,0 +1,5 @@
+# `src` and `lib` can be renamed; `@src:` and `@lib:` follow.
+[package]
+name = "renamed-folders"
+src = "source"
+lib = "vendor"

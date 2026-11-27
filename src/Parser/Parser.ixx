@@ -122,6 +122,7 @@ private:
     StmtNode* parse_if();
     StmtNode* parse_while();
     StmtNode* parse_for();
+    StmtNode* parse_match();
     StmtNode* parse_conditional_stmt();
     void synchronize_statement();
 };

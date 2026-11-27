@@ -1,0 +1,2 @@
+[packages]
+collections = ["shared-one", "shared-two"]

@@ -1,0 +1,13 @@
+[package]
+name = "bad"
+version = 1
+src = ".."
+lib = "lib"
+
+[dependencies]
+good = "1"
+wrong = 3
+broken = { version = "1", path = 7 }
+
+[mystery]
+x = 1

@@ -1,0 +1,9 @@
+module shapes::area;
+
+pub fn square_area(side: i32) -> i32 {
+    return side * side;
+}
+
+pub fn rect_area(w: i32, h: i32) -> i32 {
+    return w * h;
+}

@@ -41,6 +41,9 @@ add_executable(foolc
         src/MIR/MIR.cpp
         src/MIR/Build.cpp
         src/Module/Sha256.cpp
+        src/Module/Toml.cpp
+        src/Module/TomlSelfTest.cpp
+        src/Module/Manifest.cpp
         src/Module/BMICodec.cpp
         src/Module/BMICache.cpp
         src/Module/BMISelfTest.cpp
@@ -62,6 +65,8 @@ target_sources(foolc
         src/HIR/HIR.ixx
         src/MIR/MIR.ixx
         src/Module/BMICache.ixx
+        src/Module/Toml.ixx
+        src/Module/Manifest.ixx
 )
 
 if (MSVC)
@@ -111,11 +116,27 @@ if (BUILD_TESTING)
 
     # 2b. Project-mode fixtures: a valid import-template instantiation, and graph errors that must
     #     be reported (cycle, unresolved import, unknown template parameter).
+    # A test labelled `negative` expects foolc to reject the project: tests/expect_failure.cmake runs it, requires the
+    # non-zero exit and the message, and exits 0 itself, so the test is a plain pass for ctest, CLion and CI. Any other
+    # test passes when foolc succeeds and its output matches.
+    function(add_foolc_run_test NAME DIR REGEX LABELS)
+        set(extra_flags ${ARGN})
+        if("negative" IN_LIST LABELS)
+            add_test(NAME "${NAME}"
+                     COMMAND ${CMAKE_COMMAND} "-DREGEX=${REGEX}" -P "${CMAKE_SOURCE_DIR}/tests/expect_failure.cmake"
+                             $<TARGET_FILE:foolc> --project ${extra_flags} -I "tests/project/${DIR}"
+                     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+            set_tests_properties("${NAME}" PROPERTIES LABELS "${LABELS}")
+        else()
+            add_test(NAME "${NAME}"
+                     COMMAND foolc --project ${extra_flags} -I "tests/project/${DIR}"
+                     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+            set_tests_properties("${NAME}" PROPERTIES LABELS "${LABELS}" PASS_REGULAR_EXPRESSION "${REGEX}")
+        endif()
+    endfunction()
+
     function(add_project_test NAME DIR REGEX LABELS)
-        add_test(NAME "${NAME}"
-                 COMMAND foolc --project -I "tests/project/${DIR}"
-                 WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-        set_tests_properties("${NAME}" PROPERTIES LABELS "${LABELS}" PASS_REGULAR_EXPRESSION "${REGEX}")
+        add_foolc_run_test("${NAME}" "${DIR}" "${REGEX}" "${LABELS}")
     endfunction()
 
     add_project_test(foolc_project_templates_ok ok "1 instantiation.s.\\), 0 error" "project;positive")
@@ -148,6 +169,38 @@ if (BUILD_TESTING)
     add_project_test(foolc_project_import_no_package import_errors "package 'nothere' is not installed" "project;negative")
     add_project_test(foolc_project_import_no_file import_errors "unresolved import 'nowhere:file': no file or folder '[^']*nowhere/file'" "project;negative")
     add_project_test(foolc_project_import_drive import_errors "unresolved import ':z:nothing': no file or folder 'Z:/nothing'" "project;negative")
+
+    # 2d. fool.toml / overwrite.toml: package lookup in the project's `packages` folder and in shared collections.
+    function(add_package_test NAME DIR REGEX LABELS)
+        add_foolc_run_test("${NAME}" "${DIR}" "${REGEX}" "${LABELS}" --show-packages)
+    endfunction()
+
+    add_test(NAME foolc_toml_selftest COMMAND foolc --toml-selftest)
+    set_tests_properties(foolc_toml_selftest PROPERTIES LABELS "project;packages"
+                         PASS_REGULAR_EXPRESSION "toml selftest: ok .*manifest selftest: ok")
+    # Only what is imported is loaded: the unused package next to `shapes` has a syntax error and is never read.
+    add_package_test(foolc_pkg_local pkg_local "project geometry-app 0.3.0.*shapes 1 -> tests/project/pkg_local/packages/shapes.*checked 2 module.s. from 2 file.s.*, 0 error" "project;packages;positive")
+    add_package_test(foolc_pkg_global pkg_global "collections:.*pkg_global/collection.*mathx 2 -> tests/project/pkg_global/collection/mathx.*localtool [*] -> tests/project/pkg_global/packages/localtool.*checked 3 module.s. from 3 file.s.*, 0 error" "project;packages;positive")
+    add_package_test(foolc_pkg_override pkg_override "tools -> tests/project/pkg_override/checkout/tools.*checked 2 module.s. from 2 file.s.*, 0 error" "project;packages;positive")
+    add_package_test(foolc_pkg_chain pkg_chain "outer 1 -> tests/project/pkg_chain/packages/outer.*checked 3 module.s. from 3 file.s.*, 0 error" "project;packages;positive")
+    add_package_test(foolc_pkg_renamed_folders pkg_folders "project renamed-folders .*src: source, lib: vendor.*checked 3 module.s. from 3 file.s.*, 0 error" "project;packages;positive")
+    add_package_test(foolc_pkg_version pkg_version "main.fl:3:1: error: unresolved import '@pack:shapes:area': package 'shapes' 1.2.0 in '[^']*packages/shapes' does not satisfy the required version '2'" "project;packages;negative")
+    add_package_test(foolc_pkg_git_source pkg_missing "package 'remote' is not installed .expected in '[^']*packages/remote'; also looked in '[^']*shared-one/remote', '[^']*shared-two/remote'.; its git source 'https://example.com/remote.git' needs the package manager" "project;packages;negative")
+    add_package_test(foolc_pkg_bad_path pkg_missing "dependency 'nopath' points to '[^']*does/not/exist', which is not a folder" "project;packages;negative")
+    add_package_test(foolc_pkg_undeclared pkg_missing "package 'undeclared' is not installed" "project;packages;negative")
+    add_package_test(foolc_pkg_manifest_types pkg_badtoml "fool.toml:3:11: error: 'package.version' must be a string, not an integer" "project;packages;negative")
+    add_package_test(foolc_pkg_manifest_folder pkg_badtoml "fool.toml:4:7: error: 'src' must be a folder inside the project, not '..'" "project;packages;negative")
+    # stdout and stderr are two streams: each message gets its own test rather than relying on how they interleave.
+    add_package_test(foolc_pkg_manifest_folder_default pkg_badtoml "src: src, lib: lib" "project;packages;negative")
+    add_package_test(foolc_pkg_manifest_dependency pkg_badtoml "fool.toml:9:9: error: dependency 'wrong' must be a version string or a table, not an integer" "project;packages;negative")
+    add_package_test(foolc_pkg_manifest_dependency_path pkg_badtoml "fool.toml:10:34: error: 'path' must be a string, not an integer" "project;packages;negative")
+    add_package_test(foolc_pkg_overwrite_own_file pkg_badtoml "overwrite.toml:2:15: error: 'packages.collections' must be an array of paths, not a string" "project;packages;negative")
+    add_package_test(foolc_pkg_unknown_key pkg_badtoml "overwrite.toml:4:10: warning: unknown key 'colour' in .packages. .ignored." "project;packages;negative")
+    add_package_test(foolc_pkg_unknown_table pkg_badtoml "fool.toml:12:1: warning: unknown table 'mystery' .ignored." "project;packages;negative")
+    # Diagnostics print the file path the way the OS writes it (`tests\project\x\fool.toml` on Windows), so these regexes
+    # start at the file name; messages that quote a path (`generic_string`) always use `/`.
+    add_package_test(foolc_pkg_syntax_error pkg_syntax "fool.toml:3:11: error: unterminated string" "project;packages;negative")
+    add_package_test(foolc_pkg_syntax_error_overwrite pkg_syntax_overwrite "overwrite.toml:2:21: error: expected a value" "project;packages;negative")
 
     # 3. Per-file parse + local checks for every example and stdlib file.
     file(GLOB_RECURSE FOOL_SOURCE_FILES
@@ -222,10 +275,12 @@ if (BUILD_TESTING)
              COMMAND foolc -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/warn/no_shadow.fl"
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     set_tests_properties(foolc_warn_clean_werror PROPERTIES LABELS "warn")
+    # -Werror turns the shadowing warnings into a failing exit; expect_failure.cmake makes that a plain pass.
     add_test(NAME foolc_warn_werror_fails
-             COMMAND foolc -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/positive/shadowing.fl"
+             COMMAND ${CMAKE_COMMAND} "-DREGEX=declaration of 'total' shadows a declaration" -P "${CMAKE_SOURCE_DIR}/tests/expect_failure.cmake"
+                     $<TARGET_FILE:foolc> -q --warn-shadow -Werror "${CMAKE_SOURCE_DIR}/tests/positive/shadowing.fl"
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
-    set_tests_properties(foolc_warn_werror_fails PROPERTIES LABELS "warn" WILL_FAIL TRUE)
+    set_tests_properties(foolc_warn_werror_fails PROPERTIES LABELS "warn")
 
     # 9. .flbmi cache. The self-test checks SHA-256, the key, the codec (round trip, truncation and
     #    bit flips) and the on-disk behaviour. The round-trip runs repeat the groups above on the tree

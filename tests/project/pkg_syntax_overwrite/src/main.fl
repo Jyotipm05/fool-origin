@@ -1,0 +1,3 @@
+module pk::syntax_overwrite;
+
+fn run() -> i32 { return 0; }

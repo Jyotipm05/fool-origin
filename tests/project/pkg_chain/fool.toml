@@ -1,0 +1,5 @@
+[package]
+name = "chain-root"
+
+[dependencies]
+outer = "1"

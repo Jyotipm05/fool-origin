@@ -410,6 +410,9 @@ void BorrowCheckerPass::walk_statement(const StmtNode* stmt) {
         walk_expr(if_stmt->m_condition);
         walk_block(if_stmt->m_then);
         walk_statement(if_stmt->m_else);
+    } else if (const auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        walk_expr(match->m_subject);
+        for (const MatchArm& arm : match->m_arms) walk_block(arm.m_body);
     } else if (const auto* while_stmt = dynamic_cast<const WhileStmt*>(stmt)) {
         walk_loop(while_stmt->m_condition, nullptr, while_stmt->m_body);
     } else if (const auto* for_stmt = dynamic_cast<const ForStmt*>(stmt)) {

@@ -150,6 +150,9 @@ void TypeCheckerPass2::kill_assigned_in(const StmtNode* stmt) {
         kill_assigned_in(if_stmt->m_condition);
         kill_assigned_in(if_stmt->m_then);
         kill_assigned_in(if_stmt->m_else);
+    } else if (const auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        kill_assigned_in(match->m_subject);
+        for (const MatchArm& arm : match->m_arms) kill_assigned_in(arm.m_body);
     } else if (const auto* while_stmt = dynamic_cast<const WhileStmt*>(stmt)) {
         kill_assigned_in(while_stmt->m_condition);
         kill_assigned_in(while_stmt->m_body);
@@ -177,6 +180,13 @@ bool TypeCheckerPass2::stmt_always_exits(const StmtNode* stmt) const {
     }
     if (const auto* if_stmt = dynamic_cast<const IfStmt*>(stmt)) {
         return if_stmt->m_else != nullptr && stmt_always_exits(if_stmt->m_then) && stmt_always_exits(if_stmt->m_else);
+    }
+    if (const auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        if (match->m_arms.empty()) return false;
+        for (const MatchArm& arm : match->m_arms) {
+            if (!stmt_always_exits(arm.m_body)) return false;
+        }
+        return true;
     }
     return false;
 }

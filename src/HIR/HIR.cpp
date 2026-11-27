@@ -206,6 +206,33 @@ private:
                 indent(depth);
                 m_out += "}\n";
                 break;
+            case StmtKind::Match: {
+                const Type& subject = m_module.m_types.get(s.m_expr->m_type);
+                const EnumInfo* info = m_module.find_enum(subject.m_name);
+                m_out += "match " + expr_text(*s.m_expr) + " {\n";
+                for (const MatchCase& arm : s.m_arms) {
+                    indent(depth + 1);
+                    if (arm.m_wildcard) {
+                        m_out += "_";
+                    } else {
+                        m_out += name_of(subject.m_name) + "::" + name_of(info->m_variants[arm.m_variant].m_name);
+                        if (!arm.m_bindings.empty()) {
+                            m_out += "(";
+                            for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
+                                m_out += (i != 0 ? ", " : "") + (arm.m_bindings[i] == NO_LOCAL ? std::string("_") : local_text(arm.m_bindings[i]));
+                            }
+                            m_out += ")";
+                        }
+                    }
+                    m_out += " => {\n";
+                    print_block(arm.m_body, depth + 2);
+                    indent(depth + 1);
+                    m_out += "}\n";
+                }
+                indent(depth);
+                m_out += "}\n";
+                break;
+            }
             case StmtKind::Break: m_out += "break;\n"; break;
             case StmtKind::Continue: m_out += "continue;\n"; break;
             case StmtKind::Block:

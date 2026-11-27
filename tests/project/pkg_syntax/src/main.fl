@@ -1,0 +1,3 @@
+module pk::syntax;
+
+fn run() -> i32 { return 0; }

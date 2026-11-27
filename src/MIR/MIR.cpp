@@ -104,12 +104,23 @@ private:
 
     std::string place_text(const Place& place) const {
         std::string text = place.is_global() ? "::" + name_of(place.m_global) : local_text(place.m_local);
+        TypeId current = place.m_base_type;
         for (const Projection& projection : place.m_projections) {
             switch (projection.m_kind) {
                 case ProjectionKind::Deref: text = "(*" + text + ")"; break;
                 case ProjectionKind::Field: text += "." + name_of(projection.m_name); break;
                 case ProjectionKind::Index: text += "[" + local_text(projection.m_local) + "]"; break;
+                case ProjectionKind::Payload: {
+                    const hir::Type& enum_type = m_module.m_types.get(current);
+                    const hir::EnumInfo* info = enum_type.m_kind == hir::TypeKind::Named ? m_module.find_enum(enum_type.m_name) : nullptr;
+                    text += "." + (info != nullptr && projection.m_variant < info->m_variants.size()
+                                       ? name_of(info->m_variants[projection.m_variant].m_name)
+                                       : std::to_string(projection.m_variant)) +
+                            "." + std::to_string(projection.m_index);
+                    break;
+                }
             }
+            current = projection.m_type;
         }
         return text;
     }
@@ -166,6 +177,17 @@ private:
             case TerminatorKind::Branch:
                 return "branch " + operand_text(end.m_value) + ", bb" + std::to_string(end.m_target) + ", bb" + std::to_string(end.m_else);
             case TerminatorKind::Return: return end.m_has_value ? "return " + operand_text(end.m_value) : std::string("return");
+            case TerminatorKind::Switch: {
+                const hir::Type& enum_type = m_module.m_types.get(end.m_value.m_type);
+                const hir::EnumInfo* info = m_module.find_enum(enum_type.m_name);
+                std::string text = "switch " + operand_text(end.m_value) + " [";
+                for (size_t i = 0; i < end.m_cases.size(); ++i) {
+                    const size_t variant = end.m_cases[i].m_variant;
+                    text += (i != 0 ? ", " : "") + (info != nullptr && variant < info->m_variants.size() ? name_of(info->m_variants[variant].m_name) : std::to_string(variant)) +
+                            " -> bb" + std::to_string(end.m_cases[i].m_target);
+                }
+                return text + "], else bb" + std::to_string(end.m_else);
+            }
             case TerminatorKind::Unreachable: return "unreachable";
         }
         return "?";
@@ -242,6 +264,15 @@ private:
         for (const Projection& projection : place.m_projections) {
             if (projection.m_kind == ProjectionKind::Field) {
                 if (!is_kind(current, hir::TypeKind::Named)) error("a field is read from a value that is not a class");
+            } else if (projection.m_kind == ProjectionKind::Payload) {
+                const hir::EnumInfo* info = is_kind(current, hir::TypeKind::Named) ? m_module.find_enum(m_module.m_types.get(current).m_name) : nullptr;
+                if (info == nullptr) {
+                    error("a payload value is read from '" + m_module.m_types.text(current) + "', which is not an enum");
+                } else if (projection.m_variant >= info->m_variants.size() || projection.m_index >= info->m_variants[projection.m_variant].m_payload.size()) {
+                    error("a payload projection names a variant or slot that '" + m_module.m_types.text(current) + "' does not have");
+                } else if (info->m_variants[projection.m_variant].m_payload[projection.m_index] != projection.m_type) {
+                    error("a payload projection of '" + m_module.m_types.text(current) + "' records the wrong type");
+                }
             } else {
                 const bool view = is_kind(current, hir::TypeKind::Pointer) || is_kind(current, hir::TypeKind::Reference);
                 if (!view) {
@@ -304,6 +335,17 @@ private:
                 check_operand(end.m_value);
                 if (!is_kind(end.m_value.m_type, hir::TypeKind::Bool)) error("bb" + std::to_string(block) + " branches on a value that is not bool");
                 break;
+            case TerminatorKind::Switch: {
+                check_operand(end.m_value);
+                const hir::EnumInfo* info = is_kind(end.m_value.m_type, hir::TypeKind::Named) ? m_module.find_enum(m_module.m_types.get(end.m_value.m_type).m_name) : nullptr;
+                if (info == nullptr) error("bb" + std::to_string(block) + " switches on a value that is not an enum");
+                target(end.m_else);
+                for (const SwitchCase& arm : end.m_cases) {
+                    target(arm.m_target);
+                    if (info != nullptr && arm.m_variant >= info->m_variants.size()) error("bb" + std::to_string(block) + " switches on a variant the enum does not have");
+                }
+                break;
+            }
             case TerminatorKind::Return: {
                 const bool void_result = is_kind(fn.m_return, hir::TypeKind::Void);
                 if (end.m_has_value == void_result) {
@@ -411,6 +453,37 @@ std::vector<std::string> selftest() {
         finish(fn, 0, split);
         module.m_functions.push_back(std::move(fn));
     }
+    {   // a switch on an integer
+        Function fn = function("bad_switch", nothing);
+        Terminator pick;
+        pick.m_kind = TerminatorKind::Switch;
+        pick.m_value = int_operand(1);
+        pick.m_else = 0;
+        pick.m_cases.push_back({0, 5});
+        finish(fn, 0, pick);
+        module.m_functions.push_back(std::move(fn));
+    }
+    {   // a payload read from an integer local
+        Function fn = function("bad_payload", nothing);
+        Statement store;
+        store.m_place = local_place(0, i32);
+        store.m_value.m_kind = RvalueKind::Use;
+        store.m_value.m_type = i32;
+        Operand payload;
+        payload.m_kind = OperandKind::Read;
+        payload.m_type = i32;
+        payload.m_place = local_place(0, i32);
+        Projection projection;
+        projection.m_kind = ProjectionKind::Payload;
+        projection.m_type = i32;
+        payload.m_place.m_projections.push_back(projection);
+        store.m_value.m_operands.push_back(payload);
+        fn.m_blocks[0].m_statements.push_back(store);
+        Terminator end;
+        end.m_kind = TerminatorKind::Return;
+        finish(fn, 0, end);
+        module.m_functions.push_back(std::move(fn));
+    }
     {   // a bool stored in an i32 local
         Function fn = function("bad_store", nothing);
         Statement store;
@@ -458,6 +531,9 @@ std::vector<std::string> selftest() {
     expect("open_block", "no terminator");
     expect("bad_target", "does not exist");
     expect("bad_condition", "not bool");
+    expect("bad_switch", "switches on a value that is not an enum");
+    expect("bad_switch", "does not exist");
+    expect("bad_payload", "which is not an enum");
     expect("bad_store", "assigns a value of type");
     expect("bad_return", "returns a value from a function that returns nothing");
     expect("bad_local", "does not exist");

@@ -1,0 +1,14 @@
+module tests::match_syntax_errors;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn missing_arrow(shape: Shape) {
+    match shape {
+        // expect-error: Expected '=>' after the match pattern
+        Shape::Empty { }
+        _ => { }
+    }
+}

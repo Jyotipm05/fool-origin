@@ -1,0 +1,108 @@
+fn area(shape: Shape) -> f64 {
+  const r#1: f64;
+  const w#2: f64;
+  const h#3: f64;
+  let _4: Shape;
+  let _5: f64;
+  let _6: f64;
+  let _7: f64;
+  bb0:
+    _4 = shape#0
+    switch _4 [Circle -> bb1, Rect -> bb2, Empty -> bb3], else bb4
+  bb1:
+    r#1 = _4.Circle.0
+    _5 = r#1 * r#1
+    _6 = _5 * 3.0:f64
+    return _6
+  bb2:
+    w#2 = _4.Rect.0
+    h#3 = _4.Rect.1
+    _7 = w#2 * h#3
+    return _7
+  bb3:
+    return 0.0:f64
+  bb4:
+    unreachable
+}
+
+fn width(shape: Shape) -> f64 {
+  let result#1: f64;
+  const w#2: f64;
+  let _3: Shape;
+  bb0:
+    result#1 = 0.0:f64
+    _3 = shape#0
+    switch _3 [Rect -> bb2, Circle -> bb3], else bb4
+  bb1:
+    return result#1
+  bb2:
+    w#2 = _3.Rect.0
+    result#1 = w#2
+    goto bb1
+  bb3:
+    result#1 = 1.0:f64
+    goto bb1
+  bb4:
+    goto bb1
+}
+
+fn code(mode: Mode) -> i32 {
+  let out#1: i32;
+  let _2: Mode;
+  bb0:
+    out#1 = 0:i32
+    _2 = mode#0
+    switch _2 [Read -> bb2, Write -> bb3], else bb4
+  bb1:
+    return out#1
+  bb2:
+    out#1 = 1:i32
+    goto bb1
+  bb3:
+    out#1 = 2:i32
+    goto bb1
+  bb4:
+    unreachable
+}
+
+fn nested(shape: Shape, mode: Mode) -> i32 {
+  let total#2: i32;
+  let i#3: i32;
+  const r#4: f64;
+  let _5: bool;
+  let _6: Mode;
+  let _7: Shape;
+  bb0:
+    total#2 = 0:i32
+    i#3 = 0:i32
+    goto bb1
+  bb1:
+    _5 = i#3 < 3:i32
+    branch _5, bb2, bb3
+  bb2:
+    _6 = mode#1
+    switch _6 [Read -> bb5], else bb6
+  bb3:
+    return total#2
+  bb4:
+    i#3 = i#3 + 1:i32
+    goto bb1
+  bb5:
+    i#3 = i#3 + 1:i32
+    goto bb1
+  bb6:
+    _7 = shape#0
+    switch _7 [Circle -> bb8], else bb9
+  bb7:
+    goto bb4
+  bb8:
+    r#4 = _7.Circle.0
+    total#2 = total#2 + 1:i32
+    goto bb7
+  bb9:
+    total#2 = total#2 + 2:i32
+    goto bb7
+}
+
+fn unwrap_or_zero: not lowerable yet: generic enum 'Maybe' (generic enums are not lowerable yet) (line 83)
+// 4 of 5 function(s) lowered

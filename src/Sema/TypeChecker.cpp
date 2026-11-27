@@ -706,6 +706,8 @@ namespace fool {
             const bool else_exits = if_stmt->m_else != nullptr && stmt_always_exits(if_stmt->m_else);
             if (then_exits && !else_exits) narrow(holds_value_else);
             else if (else_exits && !then_exits) narrow(holds_value_then);
+        } else if (const auto *match_stmt = dynamic_cast<const MatchStmt *>(stmt)) {
+            check_match(match_stmt);
         } else if (const auto *while_stmt = dynamic_cast<const WhileStmt *>(stmt)) {
             kill_assigned_in(while_stmt->m_body); // later iterations see what the earlier ones assigned
             kill_assigned_in(while_stmt->m_condition);
@@ -808,6 +810,109 @@ namespace fool {
         if (declared->m_narrowed) { declared->m_narrowed = false; narrow({var->m_name}); }
     }
 
+    void TypeCheckerPass2::check_match(const MatchStmt *match) {
+        check_expression(match->m_subject);
+
+        const EnumDeclNode *enum_decl = nullptr;
+        SymbolID enum_name = INVALID_SYMBOL_ID;
+        for (const MatchArm &arm: match->m_arms) {
+            if (arm.m_wildcard || arm.m_path.size() != 2) continue;
+            enum_name = arm.m_path[0];
+            enum_decl = m_pass0.find_enum(enum_name);
+            break;
+        }
+
+        // The value must be of the enum the arms name (when the checker can tell what it is).
+        if (enum_decl != nullptr) {
+            const StaticType subject = infer_type(match->m_subject);
+            using Kind = StaticType::Kind;
+            const bool plain_other = subject.m_kind == Kind::Int || subject.m_kind == Kind::Float || subject.m_kind == Kind::Bool ||
+                                     subject.m_kind == Kind::Void || subject.m_kind == Kind::Null || subject.m_kind == Kind::Function;
+            if (plain_other || (subject.m_kind == Kind::Named && subject.m_name != enum_name)) {
+                m_diag.error(match->m_subject->m_span, "match value has type '" + describe(subject) + "', but its arms name enum '" +
+                                                       name_of(enum_name) + "'");
+            }
+        }
+
+        std::set<SymbolID> handled;
+        bool wildcard_seen = false;
+        for (const MatchArm &arm: match->m_arms) {
+            if (wildcard_seen) {
+                m_diag.error(arm.m_span, "this arm can never run: an earlier '_' arm already matches everything");
+                continue;
+            }
+            if (arm.m_wildcard) {
+                wildcard_seen = true;
+                check_block_scoped(arm.m_body);
+                continue;
+            }
+            if (arm.m_path.size() != 2) { // the parser already said so
+                check_block_scoped(arm.m_body);
+                continue;
+            }
+
+            const EnumDeclNode *arm_enum = m_pass0.find_enum(arm.m_path[0]);
+            const EnumVariant *variant = nullptr;
+            if (arm_enum == nullptr) {
+                m_diag.error(arm.m_span, "'" + name_of(arm.m_path[0]) + "' is not an enum, so '" + name_of(arm.m_path[0]) + "::" +
+                                         name_of(arm.m_path[1]) + "' cannot be matched");
+            } else if (arm_enum != enum_decl) {
+                m_diag.error(arm.m_span, "all arms of a match must name the same enum: expected '" + name_of(enum_name) + "', found '" +
+                                         name_of(arm.m_path[0]) + "'");
+            } else {
+                check_access(arm_enum, arm.m_span, "type", name_of(arm.m_path[0]));
+                for (const EnumVariant &candidate: arm_enum->m_variants) {
+                    if (candidate.m_name == arm.m_path[1]) variant = &candidate;
+                }
+                if (variant == nullptr) {
+                    m_diag.error(arm.m_span, "enum '" + name_of(arm.m_path[0]) + "' has no variant '" + name_of(arm.m_path[1]) + "'");
+                } else if (!handled.insert(variant->m_name).second) {
+                    m_diag.error(arm.m_span, "variant '" + name_of(arm.m_path[0]) + "::" + name_of(arm.m_path[1]) +
+                                             "' is already handled by an earlier arm");
+                }
+            }
+
+            if (variant != nullptr && arm.m_has_bindings && arm.m_bindings.size() != variant->m_payload.size()) {
+                m_diag.error(arm.m_span, "variant '" + name_of(arm.m_path[0]) + "::" + name_of(arm.m_path[1]) + "' carries " +
+                                         std::to_string(variant->m_payload.size()) + " value(s), but the pattern binds " +
+                                         std::to_string(arm.m_bindings.size()));
+            }
+
+            push_scope();   // the payload names live in a scope around the arm's block
+            if (variant != nullptr && arm.m_bindings.size() == variant->m_payload.size()) {
+                const bool generic = !arm_enum->m_type_params.empty();   // payload types name type parameters: left unknown
+                for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
+                    const MatchBinding &binding = arm.m_bindings[i];
+                    if (binding.m_ignored) continue;
+                    if (lookup_in_current_scope(binding.m_name) != nullptr) {
+                        m_diag.error(binding.m_span, "'" + name_of(binding.m_name) + "' is bound twice in this pattern");
+                        continue;
+                    }
+                    declare(make_binding(binding.m_name, generic ? nullptr : variant->m_payload[i], BindingKind::Immutable, binding.m_span));
+                }
+            } else {
+                for (const MatchBinding &binding: arm.m_bindings) {   // arity error: still declare the names so the body is checked
+                    if (!binding.m_ignored && lookup_in_current_scope(binding.m_name) == nullptr) {
+                        declare(make_binding(binding.m_name, nullptr, BindingKind::Immutable, binding.m_span));
+                    }
+                }
+            }
+            check_block_scoped(arm.m_body);
+            pop_scope();
+        }
+
+        if (!wildcard_seen && enum_decl != nullptr) {
+            std::string missing;
+            for (const EnumVariant &variant: enum_decl->m_variants) {
+                if (handled.count(variant.m_name) != 0) continue;
+                missing += (missing.empty() ? "" : ", ") + name_of(enum_name) + "::" + name_of(variant.m_name);
+            }
+            if (!missing.empty()) {
+                m_diag.error(match->m_span, "match is not exhaustive: missing " + missing + " (or add a '_' arm)");
+            }
+        }
+    }
+
     bool TypeCheckerPass2::always_returns(const std::vector<StmtNode *> &stmts) const {
         for (const StmtNode *stmt: stmts) {
             if (stmt_always_returns(stmt)) return true;
@@ -822,6 +927,14 @@ namespace fool {
         if (const auto *if_stmt = dynamic_cast<const IfStmt *>(stmt)) {
             return if_stmt->m_else != nullptr && stmt_always_returns(if_stmt->m_then) && stmt_always_returns(
                        if_stmt->m_else);
+        }
+        if (const auto *match = dynamic_cast<const MatchStmt *>(stmt)) {
+            // Exhaustiveness is checked where the match is checked, so every arm returning is enough here.
+            if (match->m_arms.empty()) return false;
+            for (const MatchArm &arm: match->m_arms) {
+                if (!stmt_always_returns(arm.m_body)) return false;
+            }
+            return true;
         }
         if (const auto *conditional = dynamic_cast<const ConditionalStmt *>(stmt)) {
             const ConditionalBranch *branch = select_branch(conditional, /*report=*/false);

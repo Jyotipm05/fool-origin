@@ -21,6 +21,18 @@
     ],
     "description": "Import a Fool module with compile-time template parameters (replaces C++ #define)"
   },
+  "Match on an enum": {
+    "prefix": "match",
+    "body": [
+      "match ${1:value} {",
+      "    ${2:Enum}::${3:Variant}(${4:payload}) => {",
+      "        $0",
+      "    }",
+      "    _ => { }",
+      "}"
+    ],
+    "description": "Match an enum value: one arm per variant, or `_` for the rest"
+  },
   "Compile-Time Constant (constx)": {
     "prefix": "constx",
     "body": [

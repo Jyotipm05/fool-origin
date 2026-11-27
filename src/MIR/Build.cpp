@@ -513,7 +513,63 @@ private:
                 m_cur = new_block();
                 break;
             case hir::StmtKind::Block: lower_block(s.m_body); break;
+            case hir::StmtKind::Match: lower_match(s); break;
         }
+    }
+
+    /// `match`: the value is copied into a temporary, a switch picks the arm by variant, and an arm that names payload
+    /// values copies them out of the temporary into its locals before its body runs.
+    void lower_match(const HirStmt& s) {
+        Operand subject = spill(lower_value(*s.m_expr), s.m_span);
+        const Place held = subject.m_place;
+        const hir::Type& enum_type = m_hir.m_types.get(subject.m_type);
+        const hir::EnumInfo* info = m_hir.find_enum(enum_type.m_name);
+
+        const BlockId join = new_block();
+        std::vector<BlockId> arm_blocks;
+        Terminator pick;
+        pick.m_kind = TerminatorKind::Switch;
+        pick.m_span = s.m_span;
+        pick.m_value = subject;
+        BlockId fallback = NO_BLOCK;
+        for (const hir::MatchCase& arm : s.m_arms) {
+            const BlockId block = new_block();
+            arm_blocks.push_back(block);
+            if (arm.m_wildcard) {
+                if (fallback == NO_BLOCK) fallback = block;
+            } else {
+                bool seen = false;
+                for (const SwitchCase& earlier : pick.m_cases) seen = seen || earlier.m_variant == arm.m_variant;
+                if (!seen) pick.m_cases.push_back({arm.m_variant, block});
+            }
+        }
+        if (fallback == NO_BLOCK) {   // every variant has an arm (the checker proved it): nothing else can arrive
+            fallback = new_block();
+            Block& dead = m_fn.m_blocks[fallback];
+            dead.m_terminator.m_kind = TerminatorKind::Unreachable;
+            dead.m_terminated = true;
+        }
+        pick.m_else = fallback;
+        terminate(std::move(pick));
+
+        for (size_t i = 0; i < s.m_arms.size(); ++i) {
+            const hir::MatchCase& arm = s.m_arms[i];
+            m_cur = arm_blocks[i];
+            for (size_t slot = 0; slot < arm.m_bindings.size(); ++slot) {
+                if (arm.m_bindings[slot] == hir::NO_LOCAL) continue;
+                Place payload = held;
+                Projection projection;
+                projection.m_kind = ProjectionKind::Payload;
+                projection.m_type = info->m_variants[arm.m_variant].m_payload[slot];
+                projection.m_variant = arm.m_variant;
+                projection.m_index = slot;
+                payload.m_projections.push_back(projection);
+                assign(local_place(arm.m_bindings[slot]), use(read(std::move(payload))), arm.m_span);
+            }
+            lower_block(arm.m_body);
+            jump(join);
+        }
+        m_cur = join;
     }
 
     // ---- cleanup -------------------------------------------------------------------------------
@@ -528,8 +584,10 @@ private:
             const BlockId id = work.back();
             work.pop_back();
             const Terminator& end = m_fn.m_blocks[id].m_terminator;
-            const BlockId targets[2] = {end.m_kind == TerminatorKind::Goto || end.m_kind == TerminatorKind::Branch ? end.m_target : NO_BLOCK,
-                                        end.m_kind == TerminatorKind::Branch ? end.m_else : NO_BLOCK};
+            std::vector<BlockId> targets;
+            if (end.m_kind == TerminatorKind::Goto || end.m_kind == TerminatorKind::Branch) targets.push_back(end.m_target);
+            if (end.m_kind == TerminatorKind::Branch || end.m_kind == TerminatorKind::Switch) targets.push_back(end.m_else);
+            for (const SwitchCase& arm : end.m_cases) targets.push_back(arm.m_target);
             for (const BlockId target : targets) {
                 if (target != NO_BLOCK && !reached[target]) {
                     reached[target] = true;
@@ -547,7 +605,8 @@ private:
         for (Block& block : kept) {
             Terminator& end = block.m_terminator;
             if (end.m_kind == TerminatorKind::Goto || end.m_kind == TerminatorKind::Branch) end.m_target = renumbered[end.m_target];
-            if (end.m_kind == TerminatorKind::Branch) end.m_else = renumbered[end.m_else];
+            if (end.m_kind == TerminatorKind::Branch || end.m_kind == TerminatorKind::Switch) end.m_else = renumbered[end.m_else];
+            for (SwitchCase& arm : end.m_cases) arm.m_target = renumbered[arm.m_target];
         }
         m_fn.m_blocks = std::move(kept);
     }
@@ -559,6 +618,13 @@ size_t Module::lowered_count() const {
     size_t count = 0;
     for (const Function& fn : m_functions) count += fn.m_lowered ? 1 : 0;
     return count;
+}
+
+const hir::EnumInfo* Module::find_enum(SymbolID name) const {
+    for (const hir::EnumInfo& info : m_enums) {
+        if (info.m_name == name) return &info;
+    }
+    return nullptr;
 }
 
 Module lower(const hir::Module& module) {

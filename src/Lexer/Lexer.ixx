@@ -62,6 +62,7 @@ enum class TokenKind : uint16_t {
     KwNull,          ///< 'null' (the empty optional)
     KwAs,            ///< 'as' explicit cast
     KwWhile,         ///< 'while'
+    KwMatch,         ///< 'match'
     KwStruct,        ///< 'struct' plain data aggregate
     KwBreak,         ///< 'break'
     KwContinue,      ///< 'continue'
@@ -85,6 +86,7 @@ enum class TokenKind : uint16_t {
     Dot,             ///< '.'
     DotDot,          ///< '..'
     Arrow,           ///< '->'
+    FatArrow,        ///< '=>' (a `match` arm)
     Equal,           ///< '=' mutable assignment/declaration
     EqualEqual,      ///< '=='
     ExclaimEqual,    ///< '!='

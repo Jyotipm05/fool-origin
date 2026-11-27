@@ -1,0 +1,4 @@
+module unused::broken;
+
+// Never imported, so never read: an installed package is loaded on demand only.
+fn this is not valid fool {

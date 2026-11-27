@@ -430,6 +430,37 @@ public:
     ForStmt() = default;
 };
 
+/// A name bound by a `match` arm: `r` in `Shape::Circle(r)`; `_` binds nothing.
+struct MatchBinding {
+    // 1. Member variables
+    SymbolID m_name{INVALID_SYMBOL_ID};
+    bool m_ignored{false};
+    SourceSpan m_span;
+};
+
+/// One arm of a `match`: `Enum::Variant` or `Enum::Variant(a, _, c)` or `_`, then `=>` and a block.
+struct MatchArm {
+    // 1. Member variables
+    std::vector<SymbolID> m_path;            ///< `Shape`, `Circle`; empty for the wildcard
+    bool m_wildcard{false};
+    bool m_has_bindings{false};              ///< parentheses were written (possibly empty)
+    std::vector<MatchBinding> m_bindings;
+    BlockStmt* m_body{nullptr};
+    SourceSpan m_span;
+};
+
+/// `match value { Shape::Circle(r) => { ... } Shape::Empty => { ... } _ => { ... } }`: runs the first arm whose
+/// variant the value holds, with the payload bound to the arm's names. A statement, not an expression.
+class MatchStmt : public StmtNode {
+public:
+    // 1. Member variables
+    ExprNode* m_subject{nullptr};
+    std::vector<MatchArm> m_arms;
+
+    // 2. Constructors
+    MatchStmt() = default;
+};
+
 class BreakStmt : public StmtNode {};
 class ContinueStmt : public StmtNode {};
 

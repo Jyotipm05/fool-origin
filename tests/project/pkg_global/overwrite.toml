@@ -1,0 +1,3 @@
+# Personal settings: where this machine keeps its shared packages. Not shipped with the project.
+[packages]
+collections = ["collection"]

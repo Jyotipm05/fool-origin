@@ -1,0 +1,4 @@
+[packages]
+collections = "not-an-array"
+dir = "ok"
+colour = "blue"

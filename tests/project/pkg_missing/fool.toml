@@ -1,0 +1,3 @@
+[dependencies]
+remote = { git = "https://example.com/remote.git", tag = "v1" }
+nopath = { path = "does/not/exist" }

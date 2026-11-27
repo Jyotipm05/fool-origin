@@ -1,0 +1,98 @@
+module tests::match_errors;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Other {
+    A,
+}
+
+fn not_exhaustive(shape: Shape) -> i32 {
+    // expect-error: match is not exhaustive: missing Shape::Rect, Shape::Empty (or add a '_' arm)
+    match shape {
+        Shape::Circle(r) => { return 1; }
+    }
+    return 0;
+}
+
+fn duplicate_arm(shape: Shape) -> i32 {
+    match shape {
+        Shape::Circle(r) => { return 1; }
+        // expect-error: variant 'Shape::Circle' is already handled by an earlier arm
+        Shape::Circle(radius) => { return 2; }
+        _ => { return 3; }
+    }
+}
+
+fn after_wildcard(shape: Shape) -> i32 {
+    match shape {
+        _ => { return 0; }
+        // expect-error: this arm can never run: an earlier '_' arm already matches everything
+        Shape::Empty => { return 1; }
+    }
+}
+
+fn unknown_variant(shape: Shape) -> i32 {
+    match shape {
+        // expect-error: enum 'Shape' has no variant 'Triangle'
+        Shape::Triangle(a) => { return 1; }
+        _ => { return 0; }
+    }
+}
+
+fn wrong_arity(shape: Shape) -> i32 {
+    match shape {
+        // expect-error: variant 'Shape::Rect' carries 2 value(s), but the pattern binds 1
+        Shape::Rect(w) => { return 1; }
+        // expect-error: variant 'Shape::Empty' carries 0 value(s), but the pattern binds 1
+        Shape::Empty(x) => { return 2; }
+        _ => { return 0; }
+    }
+}
+
+fn mixed_enums(shape: Shape) -> i32 {
+    match shape {
+        Shape::Empty => { return 1; }
+        // expect-error: all arms of a match must name the same enum: expected 'Shape', found 'Other'
+        Other::A => { return 2; }
+        _ => { return 0; }
+    }
+}
+
+fn not_an_enum(shape: Shape) -> i32 {
+    match shape {
+        // expect-error: 'Missing' is not an enum, so 'Missing::A' cannot be matched
+        Missing::A => { return 1; }
+        _ => { return 0; }
+    }
+}
+
+fn twice(shape: Shape) -> i32 {
+    match shape {
+        // expect-error: 'x' is bound twice in this pattern
+        Shape::Rect(x, x) => { return 1; }
+        _ => { return 0; }
+    }
+}
+
+fn read_only(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(r) => {
+            // expect-error: cannot assign
+            r = 2.0;
+            return r;
+        }
+        _ => { return 0.0; }
+    }
+}
+
+fn wrong_value(count: i32) -> i32 {
+    // expect-error: match value has type 'i32', but its arms name enum 'Shape'
+    match count {
+        Shape::Empty => { return 1; }
+        _ => { return 0; }
+    }
+}

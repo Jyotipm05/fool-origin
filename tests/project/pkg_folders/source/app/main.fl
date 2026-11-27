@@ -1,0 +1,8 @@
+module pk::folders;
+
+#import @src:util:measure;          // source/util/measure
+#import @lib:shared:unit;           // vendor/shared/unit
+
+fn run() -> i32 {
+    return measure() + unit();
+}

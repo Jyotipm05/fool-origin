@@ -1,0 +1,2 @@
+[packages]
+collections = [ "a",, "b" ]

@@ -62,13 +62,13 @@ names inside a module and is not accepted in an import path.
 | :--- | :--- |
 | `name:...` | next to the importing file |
 | `@std:...` | the standard library (`--std-root`, default `stdlib`) |
-| `@src:...` | the project's `src` folder (the nearest enclosing `src`, else `<project root>/src`) |
-| `@lib:...` | the `lib` folder of the library or package (found the same way) |
+| `@src:...` | the project's source folder (the nearest enclosing `src`, else `<project root>/src`; `[package] src` renames it) |
+| `@lib:...` | the `lib` folder of the library or package (found the same way; `[package] lib` renames it) |
 | `@sup:...` | the folder above the importing file's; `@sup:@sup:x` goes up two |
-| `@pack:name:...` | the installed package `name` (its `lib` folder if it has one), under `<project root>/packages` |
+| `@pack:name:...` | the package `name` (its `lib` folder if it has one): from the project's `packages` folder or a shared collection, see below |
 | `:c:...` | a drive path (`C:/...`) |
 
-The project root is the nearest folder above the file that holds a `fool.toml` (not read yet), else the `-I` search root.
+The project root is the nearest folder above the file that holds a `fool.toml`, else the `-I` search root.
 
 - **What a path names.** A file name stands for the whole *unit*: `store.fo`, `store.fl` and `store_linux.fex` together. If no
   such file exists but a folder does, the import covers every file directly inside that folder (not sub-folders): `@std:core`
@@ -86,6 +86,59 @@ The project root is the nearest folder above the file that holds a `fool.toml` (
   topologically.
 - A name from another module is reached with a path: `sys_mem::os_alloc_pages(n)`, `Shape::Circle`.
 - Only `pub` declarations of an imported module can be used (next section).
+
+### Projects and packages: `fool.toml` and `overwrite.toml`
+
+A folder with a `fool.toml` is a project (or a package: the same file describes both). The file is optional; without
+one every default below applies.
+
+```toml
+# fool.toml: shared with everyone who gets the project
+[package]
+name    = "geometry-app"
+version = "0.3.0"
+src     = "src"           # what @src: means (default "src")
+lib     = "lib"           # what @lib: means, and the folder other projects import from (default "lib")
+
+[packages]
+dir = "packages"          # where this project installs packages (default "packages")
+
+[dependencies]
+shapes = "1"                                      # any 1.x, found in packages/ or a shared collection
+mathx  = { version = "2", path = "../mathx" }     # use this folder (relative to fool.toml)
+remote = { git = "https://example.com/r.git" }    # recorded for the package manager; not fetched yet
+```
+
+```toml
+# overwrite.toml: next to fool.toml, personal to this machine, left out of what you distribute
+[packages]
+collections = ["~/.fool/packages", "D:/fool/packages"]    # shared package collections (or: collection = "...")
+
+[dependencies]
+shapes = { path = "../shapes-fork" }                      # work on a dependency without touching fool.toml
+```
+
+`overwrite.toml` is laid over `fool.toml` key by key (tables merge, anything else is replaced), so it can name any setting;
+the usual uses are the machine's package collection and local copies of dependencies. Keep it out of version control.
+Paths are relative to the project folder; `~` is the home folder. Problems are reported against the file they are in, with
+line and column; unknown keys and tables are warnings.
+
+**Where `@pack:name:...` looks**, first match wins:
+
+1. the project's own `path` for the dependency (`[dependencies]`, possibly from `overwrite.toml`);
+2. `<project>/packages/name`;
+3. `<collection>/name` for each shared collection, in the order listed.
+
+A package is a folder `name` containing its source (and optionally its own `fool.toml`). Its importable files are in its
+`lib` folder when it has one, else the folder itself. A dependency's `version` is a prefix of the package's version
+(`1` accepts `1.4.2`, `1.4` does not accept `1.5.0`; `*` or no version accepts anything); the version comes from the
+package's own `fool.toml` and is only checked when both sides state one. A project can use local and shared packages
+side by side, so one shared copy serves every project that depends on it.
+
+A package that has its own `fool.toml` resolves its own `@pack:` imports first through that file, then through the
+project being compiled (its `packages` folder and collections). Installed packages are not scanned up front: a package
+is read only when something imports it. `foolc --show-packages` prints each project's settings and where every
+dependency resolves.
 
 ### Visibility: `pub`
 
@@ -366,6 +419,44 @@ for (;;) { ... }                                          // until `break` or `r
   A `const` loop variable cannot be stepped.
 - There is no `for x in collection` / `a..b` form and no iteration protocol yet. `in` is reserved for that design.
 
+### `match`
+
+`match` takes an enum value apart: it runs the first arm whose variant the value holds and gives that arm the payload.
+
+```fool
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+fn area(shape: Shape) -> f64 {
+    match shape {
+        Shape::Circle(r) => { return r * r * 3.14; }
+        Shape::Rect(w, h) => { return w * h; }
+        Shape::Empty => { return 0.0; }
+    }
+}
+
+match shape {
+    Shape::Rect(w, _) => { width = w; }     // `_` in the parentheses skips a payload value
+    Shape::Circle => { width = 1.0; }       // no parentheses: the payload is not named
+    _ => { }                                // everything else
+}
+```
+
+- An arm is `Enum::Variant` (optionally `(a, b, ...)`) or `_`, then `=>` and a **block**. Arms are tried in order; a
+  comma between arms is allowed and optional.
+- The names in `(...)` are new read-only locals, one per payload value, typed as the variant declares, and visible only in
+  that arm. With parentheses the count must equal the variant's payload; without them the payload is simply not named.
+- Every variant must be covered, or the last arm must be `_`: `match is not exhaustive: missing Shape::Rect (or add a '_'
+  arm)`. A variant handled twice, an arm after `_`, a variant the enum does not have, and arms naming different enums are
+  errors. The value must be the enum the arms name.
+- `match` is a statement, not an expression: it has no value, and an arm's block is not a value either. A function whose
+  every arm returns counts as returning on all paths.
+- Not yet: nested patterns, matching on integers or strings, guards (`if`), and generic enums (they check, but are not
+  lowered to HIR yet).
+
 ### `break`, `continue`, `return`
 
 `break` and `continue` apply to the innermost loop and are errors outside one. `return value;` / `return;` must match
@@ -463,13 +554,14 @@ missed error is possible but a wrong one should not be.
 
 ## 10. What does not exist yet
 
-- **Packages.** `@pack:` finds a package under the project's `packages` folder only. `fool.toml`, `overwrite.toml`, a shared
-  package collection, git sources and a package manager are designed but not built.
+- **A package manager.** Packages are found where they were put (`packages/`, a shared collection, a `path`); nothing
+  downloads them yet. A `git = "..."` dependency is recorded and reported as needing the package manager. Version
+  requirements are a plain prefix match, with no ranges, resolution or lock file.
 - **Types inside namespaces.**
 - **Code generation.** The compiler parses, checks, lowers to HIR and builds a control-flow graph (MIR); nothing executes yet.
 - **Optimization, linking.**
-- **A way to read an enum payload.** A variant can be built (`Shape::Circle(2.0)`) and plain enums compared with `==`,
-  but there is no `match` or pattern test yet.
+- **More pattern matching.** `match` covers enum variants and their payload (see above). There are no nested patterns,
+  no matching on integers or strings, no guards, and no `match` as an expression.
 - **Ruleset conformance** (declaring and checking that a class satisfies a ruleset) and the runtime test behind
   `@dynamic_cast`.
 - **Iteration over collections** and any use of `in`; compound assignment and `++` / `--`.

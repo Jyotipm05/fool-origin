@@ -1,0 +1,7 @@
+module pk::missing;
+
+#import @pack:remote:thing;
+#import @pack:nopath:thing;
+#import @pack:undeclared:thing;
+
+fn run() -> i32 { return 0; }

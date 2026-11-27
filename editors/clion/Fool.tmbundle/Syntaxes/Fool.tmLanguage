@@ -232,7 +232,7 @@
 				</dict>
 				<dict>
 					<key>match</key>
-					<string>\b(return|if|else|for|in)\b</string>
+					<string>\b(return|if|else|for|in|while|match|break|continue)\b</string>
 					<key>name</key>
 					<string>keyword.control.flow.fool</string>
 				</dict>
