@@ -311,7 +311,12 @@ var b: Box<i64> = Box<i64> { item: 6 };
 Generic functions, classes and their methods are monomorphized: each distinct set of type arguments is compiled
 separately. Type arguments are inferred from call arguments and receivers or written explicitly (`Box<i64>::make(6)`).
 Today the checker treats a generic parameter as an unknown type (never an error) and the instantiation happens in HIR
-lowering. Constant generic arguments, generic enums and instantiating a generic from another module are not done yet.
+lowering. Constant generic arguments and instantiating a generic from another module are not done yet.
+
+A **generic enum** (`enum Option<T> { Some(T), None }`) is instantiated like a generic class: `Option<i32>` is its own enum
+type. The type arguments come from the written type (`Option<f64>::None`), else from the type the context expects (a
+return type, a declared variable, an argument), else from the payload values: `Option::Some(5)` is an `Option<i32>`. A
+variant like `Option::None` with nothing to tell `T` is "not lowerable yet" and asks for the type.
 
 ### Rulesets and blueprints
 
@@ -486,8 +491,7 @@ match shape {
   errors. The value must be the enum the arms name.
 - A `match` that starts a statement is the statement form above: it has no value, and a function whose every arm returns
   counts as returning on all paths. Anywhere an expression is expected, `match` is an expression (next section).
-- Not yet: nested patterns, matching on integers or strings, guards (`if`), and generic enums (they check, but are not
-  lowered to HIR yet).
+- Not yet: nested patterns, matching on integers or strings, and guards (`if`). Generic enums match like any other.
 
 #### `match` as an expression
 
@@ -626,7 +630,7 @@ missed error is possible but a wrong one should not be.
   `@dynamic_cast`.
 - **Iteration over collections** and any use of `in`; compound assignment and `++` / `--`.
 - **`deserialize`**, compile-time evaluation of reflection, serialization code.
-- **Generics:** constant generic arguments, generic enums, instantiation across modules, constraints enforced on
+- **Generics:** constant generic arguments, instantiation across modules, constraints enforced on
   arguments.
-- **HIR for** lambdas, async functions, reflection intrinsics and generic enums (those functions are reported by
+- **HIR for** lambdas, async functions and reflection intrinsics (those functions are reported by
   `--dump-hir` as "not lowerable yet" with the reason).

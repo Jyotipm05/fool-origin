@@ -1,5 +1,6 @@
 enum Shape { Circle(f64), Rect(f64, f64), Empty }
 enum Mode { Read, Write }
+enum Maybe<i32> { Some(i32), None }
 
 fn area(shape: Shape) -> f64 {
   match shape#0 {
@@ -68,5 +69,14 @@ fn nested(shape: Shape, mode: Mode) -> i32 {
   return total#2;
 }
 
-fn unwrap_or_zero: not lowerable yet: generic enum 'Maybe' (generic enums are not lowerable yet) (line 82)
-// 4 of 5 function(s) lowered
+fn unwrap_or_zero(m: Maybe<i32>) -> i32 {
+  match m#0 {
+    Maybe<i32>::Some(v#1) => {
+      return 1:i32;
+    }
+    Maybe<i32>::None => {
+      return 0:i32;
+    }
+  }
+}
+// 5 of 5 function(s) lowered

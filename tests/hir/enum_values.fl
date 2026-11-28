@@ -1,7 +1,9 @@
-// HIR: an enum with an underlying type and explicit values is listed as `enum Mode: u8 { Read = 2, .. }`, with every
-// variant's value (the previous one + 1 where none is written). A cast of an enum to an integer keeps its kind:
-// `as` is `cast.unchecked`, `@static_cast` is `cast.static`.
-// Expected output: enum_values.expected
+/*
+   HIR: an enum with an underlying type and explicit values is listed as `enum Mode: u8 { Read = 2, .. }`, with every
+   variant's value (the previous one + 1 where none is written). A cast of an enum to an integer keeps its kind:
+   `as` is `cast.unchecked`, `@static_cast` is `cast.static`.
+   Expected output: enum_values.expected
+*/
 
 module tests::hir::enum_values;
 

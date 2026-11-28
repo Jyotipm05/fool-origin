@@ -1,0 +1,30 @@
+/*
+   MIR: an instance of a generic enum switches and reads its payload exactly like a plain enum; the payload place
+   has the instance's payload type (`_3.Some.0` is an `i32` for `Option<i32>`).
+   Expected output: generic_enum.expected
+*/
+
+module tests::mir::generic_enum;
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+fn unwrap_or(value: Option<i32>, fallback: i32) -> i32 {
+    return match value {
+        Option::Some(v) => v,
+        Option::None => fallback,
+    };
+}
+
+fn first_positive(n: i32) -> Option<i32> {
+    if (n > 0) {
+        return Option::Some(n);
+    }
+    return Option::None;
+}
+
+fn use_it() -> i32 {
+    return unwrap_or(first_positive(3), 0);
+}

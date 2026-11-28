@@ -1,6 +1,8 @@
-// HIR + MIR: `match` reads an enum payload back. Each arm names a variant (or `_`), binds its payload to
-// immutable locals, and runs its block. A match must cover every variant or end with `_`.
-// Expected output: match.expected
+/*
+   HIR + MIR: `match` reads an enum payload back. Each arm names a variant (or `_`), binds its payload to
+   immutable locals, and runs its block. A match must cover every variant or end with `_`.
+   Expected output: match.expected
+*/
 
 module tests::hir::match_stmt;
 
@@ -73,7 +75,7 @@ fn nested(shape: Shape, mode: Mode) -> i32 {
     return total;
 }
 
-// A generic enum can be checked but not lowered yet.
+// A generic enum: each instance (`Maybe<i32>`) is lowered as an enum of its own.
 enum Maybe<T> {
     Some(T),
     None,

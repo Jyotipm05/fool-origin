@@ -1,6 +1,6 @@
 enum Shape { Circle(f64), Empty }
 
-fn takes_maybe: not lowerable yet: generic enum 'Maybe' (generic enums are not lowerable yet) (line 20)
+fn untyped_variant: not lowerable yet: cannot tell the type argument 'T' of 'Maybe::Nothing': write 'Maybe<type>::Nothing' or give the value a type (line 21)
 
 fn identity<T>: generic template
 

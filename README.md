@@ -560,7 +560,8 @@ an omitted condition means "until `break`":
 
 Enums that the lowered code mentions are listed first in the dump (`enum Shape { Circle(f64), Rect(f64, f64), Empty }`;
 an enum with an underlying type or explicit values lists them: `enum Mode: u8 { Read = 2, Write = 5 }`, and casting an enum
-to an integer is a `cast` of the enum value).
+to an integer is a `cast` of the enum value). An instance of a generic enum is an enum of its own, named by its type
+arguments (`enum Option<i32> { Some(i32), None }`), listed once however often it is used.
 A value is a `(variant Enum::Variant payload…)` expression whose payload values are converted to the declared payload
 types, and `==` / `!=` are defined for enums whose variants carry no payload (ordering and comparing payload enums are
 reported as not lowerable, since the language does not define them). A payload is read back with `match`: the
@@ -568,7 +569,7 @@ statement lowers to `match <value> { Enum::Variant(r#1, _) => { … } _ => { …
 variant's payload types. `match` as an expression lowers to `(match <value> [Enum::Variant(r#1, _) => <expr>] [_ => <expr>])`,
 every arm value converted to the type of the whole match.
 
-What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, generic enums, qualified paths other than enum variants, constant generic arguments, async functions, reflection
+What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, an enum variant whose generic arguments nothing determines, qualified paths other than enum variants, constant generic arguments, async functions, reflection
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
 loaded (instantiation needs the definition's body, so a generic defined in another module is not instantiated yet), and
 calls on a struct literal receiver (the checker does not bind them). The last line of the dump counts how many

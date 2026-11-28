@@ -1,6 +1,8 @@
-// HIR: `match` as an expression: `(match subject [pattern => value] ...)`. Every arm value is converted to the type
-// of the whole match, the context's when it gives one, otherwise the first arm's.
-// Expected output: match_expr.expected
+/*
+   HIR: `match` as an expression: `(match subject [pattern => value] ...)`. Every arm value is converted to the type
+   of the whole match, the context's when it gives one, otherwise the first arm's.
+   Expected output: match_expr.expected
+*/
 
 module tests::hir::match_expr;
 

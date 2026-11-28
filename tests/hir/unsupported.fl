@@ -17,8 +17,8 @@ enum Maybe<T> {
     Nothing,
 }
 
-fn takes_maybe(m: Maybe<i32>) {
-    return;
+fn untyped_variant() {
+    const m = Maybe::Nothing;   // nothing says what `T` is
 }
 
 fn identity<T>(x: T) -> T {

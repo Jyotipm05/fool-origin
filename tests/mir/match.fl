@@ -1,7 +1,9 @@
-// MIR: `match` becomes a `switch` on the variant; an arm that names payload values copies them out of the
-// temporary holding the matched value (`_4.Rect.1` is the second payload value of `Rect`). Without `_`, the switch's
-// else target is an `unreachable` block.
-// Expected output: match.expected
+/*
+   MIR: `match` becomes a `switch` on the variant; an arm that names payload values copies them out of the
+   temporary holding the matched value (`_4.Rect.1` is the second payload value of `Rect`). Without `_`, the switch's
+   else target is an `unreachable` block.
+   Expected output: match.expected
+*/
 
 module tests::hir::match_stmt;
 

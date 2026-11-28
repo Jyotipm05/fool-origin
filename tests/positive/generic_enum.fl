@@ -1,0 +1,64 @@
+/*
+   Generic enums: `Option<T>`, `Result<T, E>` and a pair type, built, passed around and taken apart with `match`.
+*/
+
+module tests::generic_enum_ok;
+
+enum Option<T> {
+    Some(T),
+    None,
+}
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E),
+}
+
+enum Pair<A, B> {
+    Both(A, B),
+    Neither,
+}
+
+fn first_positive(n: i32) -> Option<i32> {
+    if (n > 0) {
+        return Option::Some(n);
+    }
+    return Option::None;
+}
+
+fn nothing() -> Option<f64> {
+    return Option<f64>::None;
+}
+
+fn unwrap_or(value: Option<i32>, fallback: i32) -> i32 {
+    return match value {
+        Option::Some(v) => v,
+        Option::None => fallback,
+    };
+}
+
+fn parse(n: i32) -> Result<i32, bool> {
+    if (n < 0) {
+        return Result::Err(true);
+    }
+    return Result::Ok(n);
+}
+
+fn code(result: Result<i32, bool>) -> i32 {
+    match result {
+        Result::Ok(v) => { return v; }
+        Result::Err(failed) => { return 0; }
+    }
+}
+
+fn wrap<T>(x: T) -> Option<T> {
+    return Option::Some(x);
+}
+
+fn combined() -> i32 {
+    const a = wrap(5);
+    const pair: Pair<i32, bool> = Pair::Both(1, true);
+    var slot: Option<i64> = Option::Some(5);
+    slot = Option::Some(7);
+    return unwrap_or(a, 0) + code(parse(3));
+}

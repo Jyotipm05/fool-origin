@@ -1,0 +1,47 @@
+enum Option<i32> { Some(i32), None }
+enum Option<f64> { Some(f64), None }
+enum Result<i32, bool> { Ok(i32), Err(bool) }
+
+fn first_positive(n: i32) -> Option<i32> {
+  if (> n#0 0:i32) {
+    return (variant Option<i32>::Some n#0);
+  }
+  return (variant Option<i32>::None);
+}
+
+fn nothing() -> Option<f64> {
+  return (variant Option<f64>::None);
+}
+
+fn unwrap_or(value: Option<i32>, fallback: i32) -> i32 {
+  return (match value#0 [Option<i32>::Some(v#2) => v#2] [Option<i32>::None => fallback#1]);
+}
+
+fn parse(n: i32) -> Result<i32, bool> {
+  if (< n#0 0:i32) {
+    return (variant Result<i32, bool>::Err true);
+  }
+  return (variant Result<i32, bool>::Ok n#0);
+}
+
+fn code(result: Result<i32, bool>) -> i32 {
+  match result#0 {
+    Result<i32, bool>::Ok(v#1) => {
+      return v#1;
+    }
+    Result<i32, bool>::Err(failed#2) => {
+      return 0:i32;
+    }
+  }
+}
+
+fn wrap<T>: generic template
+
+fn use_wrap() -> i32 {
+  return (call unwrap_or (call wrap<i32> 5:i32) 0:i32);
+}
+
+fn wrap<i32>(x: i32) -> Option<i32> {
+  return (variant Option<i32>::Some x#0);
+}
+// 7 of 7 function(s) lowered, 1 generic template(s) instantiated on use

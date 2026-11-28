@@ -1,6 +1,8 @@
-// MIR: `match` as a value switches on the variant like the statement does, but every arm stores its value in one
-// result temporary and then jumps to a shared join block; the value is read from that temporary after the join.
-// Expected output: match_expr.expected
+/*
+   MIR: `match` as a value switches on the variant like the statement does, but every arm stores its value in one
+   result temporary and then jumps to a shared join block; the value is read from that temporary after the join.
+   Expected output: match_expr.expected
+*/
 
 module tests::mir::match_expr;
 

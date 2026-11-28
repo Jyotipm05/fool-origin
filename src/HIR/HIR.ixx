@@ -181,11 +181,12 @@ struct EnumVariantInfo {
     int64_t m_value{0};                  ///< the variant's number: `Read = 2`, else the previous value + 1 (0 for the first)
 };
 
-/// A (non-generic) enum that some lowered code mentions: a Named type whose variants are listed in declaration order.
+/// An enum that some lowered code mentions (an instance, for a generic enum): a Named type whose variants are listed in declaration order.
 struct EnumInfo {
     // 1. Member variables
-    SymbolID m_name{INVALID_SYMBOL_ID};
+    SymbolID m_name{INVALID_SYMBOL_ID};          ///< `Shape`, or `Maybe<i32>` for an instance of a generic enum
     const EnumDeclNode* m_decl{nullptr};
+    std::vector<TypeId> m_args;                  ///< type arguments of an instance of a generic enum, one per type parameter
     TypeId m_underlying{NO_TYPE};        ///< `enum Mode: u8`: the integer type of the values; NO_TYPE when not written
     bool m_valued{false};                ///< the declaration wrote the underlying type or at least one explicit value
     std::vector<EnumVariantInfo> m_variants;

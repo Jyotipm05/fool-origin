@@ -225,6 +225,10 @@ Example: `match` touched `KwMatch` / `FatArrow` (lexer), `MatchStmt` / `MatchArm
 `kill_assigned_in`, the borrow checker's `walk_statement`, HIR's `Match` statement (`MatchCase`), and in MIR the `Payload`
 projection and the `Switch` terminator (builder, block pruning and renumbering, printer, verifier and its selftest).
 
+Example: generic enums in HIR touched `enum_type` (instances named like class instances, payload types lowered under the enum's
+own type arguments), `lower_enum_value` (type arguments from the path, the expected type or the payload values) and
+`EnumInfo::m_args`; MIR needed nothing, since it finds an enum by its instance name.
+
 Example: explicit enum values touched `EnumDeclNode::m_underlying` and `EnumVariant::m_value` (AST), `parse_enum`, the codec
 (version 8 → 9), `evaluate_enum_values` (`Sema/ConstEval.cpp`, used by both the checker and HIR lowering, so they cannot
 disagree), `check_enum_cast`, and HIR's `EnumInfo::m_underlying` / `EnumVariantInfo::m_value` with the dump.
