@@ -1,0 +1,91 @@
+; ModuleID = 'tests::llvm::pointers'
+source_filename = "tests::llvm::pointers"
+
+define void @"tests::llvm::pointers.fill"(ptr %p0, i8 %p1, i64 %p2) {
+entry:
+  %l0 = alloca ptr
+  %l1 = alloca i8
+  %l2 = alloca i64
+  %l3 = alloca i64
+  %l4 = alloca i1
+  store ptr %p0, ptr %l0
+  store i8 %p1, ptr %l1
+  store i64 %p2, ptr %l2
+  br label %bb0
+bb0:
+  store i64 0, ptr %l3
+  br label %bb1
+bb1:
+  %t0 = load i64, ptr %l3
+  %t1 = load i64, ptr %l2
+  %t2 = icmp ult i64 %t0, %t1
+  store i1 %t2, ptr %l4
+  %t3 = load i1, ptr %l4
+  br i1 %t3, label %bb2, label %bb4
+bb2:
+  %t4 = load i8, ptr %l1
+  %t5 = load ptr, ptr %l0
+  %t6 = load i64, ptr %l3
+  %t7 = getelementptr i8, ptr %t5, i64 %t6
+  store i8 %t4, ptr %t7
+  br label %bb3
+bb3:
+  %t8 = load i64, ptr %l3
+  %t9 = add i64 %t8, 1
+  store i64 %t9, ptr %l3
+  br label %bb1
+bb4:
+  ret void
+}
+
+define i32 @"tests::llvm::pointers.read_through"(ptr %p0) {
+entry:
+  %l0 = alloca ptr
+  store ptr %p0, ptr %l0
+  br label %bb0
+bb0:
+  %t0 = load ptr, ptr %l0
+  %t1 = load i32, ptr %t0
+  ret i32 %t1
+}
+
+define void @"tests::llvm::pointers.write_through"(ptr %p0, i32 %p1) {
+entry:
+  %l0 = alloca ptr
+  %l1 = alloca i32
+  store ptr %p0, ptr %l0
+  store i32 %p1, ptr %l1
+  br label %bb0
+bb0:
+  %t0 = load i32, ptr %l1
+  %t1 = load ptr, ptr %l0
+  store i32 %t0, ptr %t1
+  ret void
+}
+
+define i32 @"tests::llvm::pointers.through_local"() {
+entry:
+  %l0 = alloca i32
+  %l1 = alloca ptr
+  %l2 = alloca ptr
+  %l3 = alloca ptr
+  %l4 = alloca ptr
+  %l5 = alloca i32
+  br label %bb0
+bb0:
+  store i32 5, ptr %l0
+  store ptr %l0, ptr %l1
+  %t0 = load ptr, ptr %l1
+  store ptr %t0, ptr %l2
+  %t2 = load ptr, ptr %l2
+  call void @"tests::llvm::pointers.write_through"(ptr %t2, i32 9)
+  store ptr %l0, ptr %l3
+  %t3 = load ptr, ptr %l3
+  store ptr %t3, ptr %l4
+  %t5 = load ptr, ptr %l4
+  %t6 = call i32 @"tests::llvm::pointers.read_through"(ptr %t5)
+  store i32 %t6, ptr %l5
+  %t7 = load i32, ptr %l5
+  ret i32 %t7
+}
+

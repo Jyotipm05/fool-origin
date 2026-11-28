@@ -1,0 +1,27 @@
+/*
+   LLVM IR: pointers and references are opaque `ptr`. `*p` loads the pointer and then the value, `p[i]` is a
+   `getelementptr` of the element type, `&x` is the address of x's stack slot.
+   Expected output: pointers.expected
+*/
+
+module tests::llvm::pointers;
+
+fn fill(dst: *u8, value: u8, bytes: usize) {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
+        dst[i] = value;
+    }
+}
+
+fn read_through(p: *i32) -> i32 {
+    return *p;
+}
+
+fn write_through(p: *i32, value: i32) {
+    *p = value;
+}
+
+fn through_local() -> i32 {
+    var x: i32 = 5;
+    write_through(&x, 9);
+    return read_through(&x);
+}

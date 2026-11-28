@@ -1,0 +1,20 @@
+; ModuleID = 'tests::llvm::unsupported'
+source_filename = "tests::llvm::unsupported"
+; not emitted: sum: the type 'Point' (only integers, floats, bools and pointers are emitted so far)
+; not emitted: first_mode: the type 'Mode' (only integers, floats, bools and pointers are emitted so far)
+; not emitted: greeting: the type 'StringView' (only integers, floats, bools and pointers are emitted so far)
+
+define i32 @"tests::llvm::unsupported.fine"(i32 %p0) {
+entry:
+  %l0 = alloca i32
+  %l1 = alloca i32
+  store i32 %p0, ptr %l0
+  br label %bb0
+bb0:
+  %t0 = load i32, ptr %l0
+  %t1 = add i32 %t0, 1
+  store i32 %t1, ptr %l1
+  %t2 = load i32, ptr %l1
+  ret i32 %t2
+}
+

@@ -63,7 +63,7 @@ flowchart TD
     FEX --> Overlay["ModuleGraph: Overlay Patching"]
     BMICache --> Sema
     Overlay --> Sema
-    Sema --> Codegen["Codegen Backend (FastEmitter / LLVM)"]
+    Sema --> Codegen["Codegen Backend (LLVM IR via clang; FastEmitter planned)"]
 ```
 
 ---
@@ -435,6 +435,7 @@ fool-origin/
 │   ├── Sema/                  # Pass 0 pruning + const-eval, Pass 1 module graph, Pass 2 checker, borrow checker
 │   ├── HIR/                   # HIR v1: typed, resolved, desugared function bodies lowered from the checked AST
 │   ├── MIR/                   # MIR v1: control-flow graph of basic blocks built from the HIR, with a verifier
+│   ├── Codegen/               # LLVM backend M1: MIR -> textual LLVM IR (`--emit-llvm`), linked by clang (`--build`)
 │   ├── Module/                # `.flbmi` cache: SHA-256, binary parse-tree codec, on-disk cache manager
 │   └── main.cpp               # Driver CLI (file / project / expect-error test modes)
 ├── docs/                      # language.md (the language) and source-structure.md (the compiler's source tree)
@@ -626,7 +627,28 @@ fn sum(data: const* f32, length: usize) -> f32 {
   test suite builds and verifies the MIR of every function of `stdlib/` and `examples/` that HIR lowers.
 
 Functions HIR could not lower stay "not lowerable yet" with the same reason, and generic templates are represented by their
-instantiations only. There is no optimization, no SSA and no code generation yet.
+instantiations only. There is no optimization and no SSA.
+
+### LLVM backend (M1)
+
+`foolc --emit-llvm file.fl` turns the MIR into **textual LLVM IR** (`src/Codegen/LLVM/`), and `foolc --build file.fl -o prog`
+writes that IR to a `.ll` file and lets `clang` compile and link it, so the only run-time dependency is a `clang`
+(`--clang <path>`, else `$FOOL_CLANG`, else `clang` on the PATH; `--keep-ll` keeps the `.ll`). The native emitter
+(`FastEmitter`) is not rejected, only postponed: the compiler has to run real programs first.
+
+- **Shape of the IR.** Every MIR local is an `alloca`, read with `load` and written with `store`; clang's `-O1` turns them
+  into registers. MIR blocks are labelled blocks (`bb0`, `bb1`, ...) with `br` and `ret`. A function is
+  `@"<module>.<name>"`, so equal names in different modules never clash.
+- **Arithmetic.** Signed and unsigned types pick `sdiv`/`udiv`, `srem`/`urem`, `slt`/`ult` and `sext`/`zext`; floats use
+  `fadd`, `fdiv`, `fcmp o...`. Integer arithmetic wraps; dividing by zero is undefined behaviour.
+- **Pointers and references** are opaque `ptr`; `*p`, `p[i]` (`getelementptr`) and `&x` work on stack slots.
+- **Entry point.** A `fn main()` that takes no parameters and returns nothing or `i32` gets the C entry point `@main`
+  (returning its value, or 0).
+- **C functions.** A body-less `fn` marked `@extern("C", link_name = "putchar")` becomes a `declare` of its link name.
+- **What is not emitted yet.** Classes, structs, enums and `match`, optionals, strings, globals and constants, method
+  and ruleset dispatch, lambdas, and calls into another module. A function that uses one is not dropped silently: the IR
+  lists it as `; not emitted: <function>: <reason>`, and `--build` refuses the program (`cannot build: N function(s) cannot
+  be compiled to LLVM yet`). Only a single file is built so far; there is no project-mode build.
 
 ### Implementation status
 
@@ -646,7 +668,8 @@ instantiations only. There is no optimization, no SSA and no code generation yet
 | `$serialize`, built-in `serialize(x)`, reflection intrinsics, `--dump-reflection` | Implemented (checks and metadata; no code generation yet) |
 | HIR v1 (`--dump-hir`): typed, resolved, desugared bodies, generics monomorphized | Implemented (see above; unsupported functions are reported, not skipped) |
 | MIR v1 (`--dump-mir`): control-flow graph of basic blocks built from the HIR, verified | Implemented (see above) |
-| Code generation | **Planned** |
+| LLVM backend M1 (`--emit-llvm`, `--build`): integers, floats, bools, pointers, control flow, calls, `@extern("C")`, `main` | Implemented (see above; aggregates, strings, globals, other modules not yet) |
+| Native emitter (`FastEmitter`) | **Planned** |
 
 > Import-template instantiations are checked as separate runs of the importing module's dependency, but cross-module lookups currently use the default instantiation of the imported module.
 
@@ -747,6 +770,8 @@ foolc --warn-shadow -Werror             # warn about shadowing declarations; fai
 foolc --dump-types file.fl              # inferred type of every expression
 foolc --dump-hir file.fl                # lowered HIR of every function (or why it is not lowerable yet)
 foolc --dump-mir file.fl                # MIR control-flow graph of every lowered function (verified before printing)
+foolc --emit-llvm file.fl               # LLVM IR text of every function the backend can emit (the others are listed as comments)
+foolc --build prog.fl -o prog           # compile one program with clang (needs a clang; --clang <path>, --keep-ll)
 foolc --dump-reflection file.fl         # $serialize metadata: fields and why a field is not serializable
 foolc --cache                           # reuse parsed files from .fool_cache/bmi (see "The .flbmi cache")
 foolc --target windows-x86_64 --project # check a different target (default: linux-x86_64)

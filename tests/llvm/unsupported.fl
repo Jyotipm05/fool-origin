@@ -1,0 +1,34 @@
+/*
+   LLVM IR: what the backend cannot emit yet is not dropped silently. The IR starts with a `; not emitted: <function>: <reason>`
+   comment for each such function, and `--build` refuses to link a program that has any.
+   Expected output: unsupported.expected
+*/
+
+module tests::llvm::unsupported;
+
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+enum Mode {
+    Read,
+    Write,
+}
+
+fn sum(p: Point) -> i32 {
+    return p.x + p.y;
+}
+
+fn first_mode() -> Mode {
+    return Mode::Read;
+}
+
+fn greeting() -> i32 {
+    const text = "hello";
+    return 1;
+}
+
+fn fine(a: i32) -> i32 {
+    return a + 1;
+}

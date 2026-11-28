@@ -40,6 +40,7 @@ add_executable(foolc
         src/HIR/Lower.cpp
         src/MIR/MIR.cpp
         src/MIR/Build.cpp
+        src/Codegen/LLVM/LLVMCodeGen.cpp
         src/Module/Sha256.cpp
         src/Module/Toml.cpp
         src/Module/TomlSelfTest.cpp
@@ -64,6 +65,7 @@ target_sources(foolc
         src/Sema/BorrowChecker.ixx
         src/HIR/HIR.ixx
         src/MIR/MIR.ixx
+        src/Codegen/LLVM/LLVMCodeGen.ixx
         src/Module/BMICache.ixx
         src/Module/Toml.ixx
         src/Module/Manifest.ixx
@@ -425,6 +427,54 @@ if (BUILD_TESTING)
     set_tests_properties(foolc_calls_project PROPERTIES LABELS "calls;project"
         PASS_REGULAR_EXPRESSION
         "call render_box \\([0-9]+:[0-9]+\\): x=arg0 y=arg1 scale=default width=arg2 height=arg3 depth=default")
+
+    # 15. LLVM backend (`--emit-llvm`): golden IR files, with the same plain / BMI-roundtrip variants as above.
+    file(GLOB FOOL_LLVM_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/llvm/*.fl")
+    foreach(LLVM_FILE ${FOOL_LLVM_FILES})
+        get_filename_component(LLVM_NAME "${LLVM_FILE}" NAME_WE)
+        foreach(VARIANT plain roundtrip)
+            set(EXTRA_FLAG "")
+            set(TEST_SUFFIX "")
+            set(TEST_LABELS "llvm")
+            if(VARIANT STREQUAL "roundtrip")
+                set(EXTRA_FLAG "--bmi-roundtrip")
+                set(TEST_SUFFIX "_roundtrip")
+                set(TEST_LABELS "llvm;bmi")
+            endif()
+            add_test(NAME "foolc_llvm_${LLVM_NAME}${TEST_SUFFIX}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${LLVM_FILE} -DFLAG=--emit-llvm
+                             -DEXTRA=${EXTRA_FLAG} -DEXPECTED=${CMAKE_SOURCE_DIR}/tests/llvm/${LLVM_NAME}.expected
+                             -P ${CMAKE_SOURCE_DIR}/tests/calls/run_golden.cmake)
+            set_tests_properties("foolc_llvm_${LLVM_NAME}${TEST_SUFFIX}" PROPERTIES LABELS "${TEST_LABELS}")
+        endforeach()
+    endforeach()
+    # `--build` refuses a program with functions the backend cannot emit, and a program without `fn main`.
+    add_test(NAME foolc_llvm_build_unsupported
+             COMMAND ${CMAKE_COMMAND} "-DREGEX=3 function\\(s\\) cannot be compiled to LLVM yet"
+                     -P "${CMAKE_SOURCE_DIR}/tests/expect_failure.cmake"
+                     $<TARGET_FILE:foolc> -q --build ${CMAKE_SOURCE_DIR}/tests/llvm/unsupported.fl
+                     -o ${CMAKE_BINARY_DIR}/tests_llvm/unsupported${CMAKE_EXECUTABLE_SUFFIX})
+    add_test(NAME foolc_llvm_build_no_main
+             COMMAND ${CMAKE_COMMAND} "-DREGEX=the program has no 'fn main\\(\\)'"
+                     -P "${CMAKE_SOURCE_DIR}/tests/expect_failure.cmake"
+                     $<TARGET_FILE:foolc> -q --build ${CMAKE_SOURCE_DIR}/tests/llvm/scalars.fl
+                     -o ${CMAKE_BINARY_DIR}/tests_llvm/scalars${CMAKE_EXECUTABLE_SUFFIX})
+    set_tests_properties(foolc_llvm_build_unsupported foolc_llvm_build_no_main PROPERTIES LABELS "llvm")
+    # Programs that are built with clang, run, and checked for their exit status and output (tests/run_program.cmake).
+    # Needs a clang at test time; without one these tests are simply not registered.
+    find_program(FOOL_CLANG NAMES clang clang-18 clang-19 clang-20)
+    if(FOOL_CLANG)
+        file(GLOB FOOL_RUN_FILES LIST_DIRECTORIES false CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/run/*.fl")
+        foreach(RUN_FILE ${FOOL_RUN_FILES})
+            get_filename_component(RUN_NAME "${RUN_FILE}" NAME_WE)
+            add_test(NAME "foolc_run_${RUN_NAME}"
+                     COMMAND ${CMAKE_COMMAND} -DFOOLC=$<TARGET_FILE:foolc> -DINPUT=${RUN_FILE} -DCLANG=${FOOL_CLANG}
+                             -DWORK=${CMAKE_BINARY_DIR}/tests_run -P ${CMAKE_SOURCE_DIR}/tests/run_program.cmake)
+            set_tests_properties("foolc_run_${RUN_NAME}" PROPERTIES LABELS "llvm;run")
+        endforeach()
+    else()
+        message(STATUS "clang not found: the tests that build and run programs (tests/run) are not registered")
+    endif()
 
     set_tests_properties(foolc_bmi_selftest foolc_bmi_roundtrip_sources foolc_bmi_roundtrip_positive
                          foolc_bmi_roundtrip_negative foolc_bmi_roundtrip_borrow foolc_bmi_roundtrip_warn

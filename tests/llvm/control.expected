@@ -1,0 +1,156 @@
+; ModuleID = 'tests::llvm::control'
+source_filename = "tests::llvm::control"
+
+declare i32 @"putchar"(i32)
+
+define i32 @"tests::llvm::control.fib"(i32 %p0) {
+entry:
+  %l0 = alloca i32
+  %l1 = alloca i1
+  %l2 = alloca i32
+  %l3 = alloca i32
+  %l4 = alloca i32
+  %l5 = alloca i32
+  %l6 = alloca i32
+  store i32 %p0, ptr %l0
+  br label %bb0
+bb0:
+  %t0 = load i32, ptr %l0
+  %t1 = icmp slt i32 %t0, 2
+  store i1 %t1, ptr %l1
+  %t2 = load i1, ptr %l1
+  br i1 %t2, label %bb1, label %bb2
+bb1:
+  %t3 = load i32, ptr %l0
+  ret i32 %t3
+bb2:
+  %t4 = load i32, ptr %l0
+  %t5 = sub i32 %t4, 1
+  store i32 %t5, ptr %l2
+  %t6 = load i32, ptr %l2
+  %t7 = call i32 @"tests::llvm::control.fib"(i32 %t6)
+  store i32 %t7, ptr %l3
+  %t8 = load i32, ptr %l0
+  %t9 = sub i32 %t8, 2
+  store i32 %t9, ptr %l4
+  %t10 = load i32, ptr %l4
+  %t11 = call i32 @"tests::llvm::control.fib"(i32 %t10)
+  store i32 %t11, ptr %l5
+  %t12 = load i32, ptr %l3
+  %t13 = load i32, ptr %l5
+  %t14 = add i32 %t12, %t13
+  store i32 %t14, ptr %l6
+  %t15 = load i32, ptr %l6
+  ret i32 %t15
+}
+
+define i64 @"tests::llvm::control.sum_to"(i32 %p0) {
+entry:
+  %l0 = alloca i32
+  %l1 = alloca i64
+  %l2 = alloca i32
+  %l3 = alloca i1
+  %l4 = alloca i1
+  %l5 = alloca i64
+  store i32 %p0, ptr %l0
+  br label %bb0
+bb0:
+  store i64 0, ptr %l1
+  store i32 0, ptr %l2
+  br label %bb1
+bb1:
+  %t0 = load i32, ptr %l2
+  %t1 = load i32, ptr %l0
+  %t2 = icmp slt i32 %t0, %t1
+  store i1 %t2, ptr %l3
+  %t3 = load i1, ptr %l3
+  br i1 %t3, label %bb2, label %bb4
+bb2:
+  %t4 = load i32, ptr %l2
+  %t5 = icmp eq i32 %t4, 3
+  store i1 %t5, ptr %l4
+  %t6 = load i1, ptr %l4
+  br i1 %t6, label %bb5, label %bb6
+bb3:
+  %t7 = load i32, ptr %l2
+  %t8 = add i32 %t7, 1
+  store i32 %t8, ptr %l2
+  br label %bb1
+bb4:
+  %t9 = load i64, ptr %l1
+  ret i64 %t9
+bb5:
+  br label %bb3
+bb6:
+  %t10 = load i32, ptr %l2
+  %t11 = sext i32 %t10 to i64
+  store i64 %t11, ptr %l5
+  %t12 = load i64, ptr %l1
+  %t13 = load i64, ptr %l5
+  %t14 = add i64 %t12, %t13
+  store i64 %t14, ptr %l1
+  br label %bb3
+}
+
+define i1 @"tests::llvm::control.both"(i1 %p0, i1 %p1) {
+entry:
+  %l0 = alloca i1
+  %l1 = alloca i1
+  %l2 = alloca i1
+  %l3 = alloca i1
+  %l4 = alloca i1
+  store i1 %p0, ptr %l0
+  store i1 %p1, ptr %l1
+  br label %bb0
+bb0:
+  %t0 = load i1, ptr %l0
+  br i1 %t0, label %bb1, label %bb2
+bb1:
+  %t1 = load i1, ptr %l1
+  store i1 %t1, ptr %l3
+  br label %bb3
+bb2:
+  store i1 false, ptr %l3
+  br label %bb3
+bb3:
+  %t2 = load i1, ptr %l3
+  br i1 %t2, label %bb5, label %bb4
+bb4:
+  %t3 = load i1, ptr %l0
+  %t4 = xor i1 %t3, true
+  store i1 %t4, ptr %l4
+  %t5 = load i1, ptr %l4
+  store i1 %t5, ptr %l2
+  br label %bb6
+bb5:
+  store i1 true, ptr %l2
+  br label %bb6
+bb6:
+  %t6 = load i1, ptr %l2
+  ret i1 %t6
+}
+
+define void @"tests::llvm::control.say_hi"() {
+entry:
+  br label %bb0
+bb0:
+  %t0 = call i32 @"putchar"(i32 72)
+  %t1 = call i32 @"putchar"(i32 105)
+  %t2 = call i32 @"putchar"(i32 10)
+  ret void
+}
+
+define void @"tests::llvm::control.main"() {
+entry:
+  br label %bb0
+bb0:
+  call void @"tests::llvm::control.say_hi"()
+  ret void
+}
+
+define i32 @main() {
+entry:
+  call void @"tests::llvm::control.main"()
+  ret i32 0
+}
+

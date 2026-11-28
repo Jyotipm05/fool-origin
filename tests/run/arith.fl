@@ -1,0 +1,25 @@
+/*
+   Run test: integer and float arithmetic, comparisons and casts, checked through the exit status.
+*/
+
+module tests::run::arith;
+
+fn check(ok: bool, code: i32) -> i32 {
+    if (ok) {
+        return 0;
+    }
+    return code;
+}
+
+fn main() -> i32 {
+    var failed: i32 = 0;
+    failed = failed + check(7 / 2 == 3, 1);
+    failed = failed + check(-7 / 2 == -3, 2);
+    failed = failed + check(-7 % 3 == -1, 4);
+    failed = failed + check(200 as u8 / 3 as u8 == 66 as u8, 8);
+    const big: u32 = 4000000000;
+    failed = failed + check(big > 3000000000, 16);
+    failed = failed + check(@static_cast<f64>(7) / 2.0 == 3.5, 32);
+    failed = failed + check((2.75 as i32) == 2, 64);
+    return failed;
+}

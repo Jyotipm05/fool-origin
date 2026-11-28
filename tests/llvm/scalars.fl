@@ -1,0 +1,62 @@
+/*
+   LLVM IR: integers, floats and bools. Every MIR local is an `alloca`, every read a `load` and every write a `store`
+   (clang's mem2reg turns them into registers); signed and unsigned types pick `sdiv`/`udiv`, `slt`/`ult` and `sext`/`zext`;
+   floats use the `f` forms and ordered comparisons.
+   Expected output: scalars.expected
+*/
+
+module tests::llvm::scalars;
+
+fn signed_ops(a: i32, b: i32) -> i32 {
+    return (a + b) * (a - b) / (b + 1) % 7;
+}
+
+fn unsigned_ops(a: u32, b: u32) -> u32 {
+    return a / (b + 1) % 7;
+}
+
+fn bits(a: u8, b: u8) -> u8 {
+    return (a & b) | (a ^ b);
+}
+
+fn compare(a: i64, b: i64, c: u64, d: u64) -> bool {
+    const signed_less = a < b;
+    const unsigned_less = c < d;
+    return signed_less == unsigned_less;
+}
+
+fn floats(x: f64, y: f64) -> f64 {
+    return -(x * y) + x / y - 1.5;
+}
+
+fn single(x: f32) -> f32 {
+    return x * 0.25;
+}
+
+fn float_compare(x: f64, y: f64) -> bool {
+    return x <= y;
+}
+
+fn negate(flag: bool) -> bool {
+    return !flag;
+}
+
+fn widen(a: i8, b: u8) -> i64 {
+    return @static_cast<i64>(a) + @static_cast<i64>(b);
+}
+
+fn narrow(a: i64) -> i8 {
+    return a as i8;
+}
+
+fn to_float(a: i32, b: u32) -> f64 {
+    return @static_cast<f64>(a) + @static_cast<f64>(b);
+}
+
+fn to_int(x: f64) -> i32 {
+    return x as i32;
+}
+
+fn to_bool(n: i32) -> bool {
+    return n as bool;
+}

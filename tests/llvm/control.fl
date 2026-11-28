@@ -1,0 +1,43 @@
+/*
+   LLVM IR: control flow and calls. MIR blocks become labelled blocks with `br`; a call to a function of the module is
+   `@"<module>.<name>"`, a call to an `@extern("C")` function is a `declare` of its link name. A `fn main` also gets the C
+   entry point `@main`, which returns its status (or 0 when `main` returns nothing).
+   Expected output: control.expected
+*/
+
+module tests::llvm::control;
+
+@extern("C", link_name = "putchar")
+fn put_char(c: i32) -> i32;
+
+fn fib(n: i32) -> i32 {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn sum_to(limit: i32) -> i64 {
+    var total: i64 = 0;
+    for (var i: i32 = 0; i < limit; i = i + 1) {
+        if (i == 3) {
+            continue;
+        }
+        total = total + @static_cast<i64>(i);
+    }
+    return total;
+}
+
+fn both(a: bool, b: bool) -> bool {
+    return a && b || !a;
+}
+
+fn say_hi() {
+    put_char(72);
+    put_char(105);
+    put_char(10);
+}
+
+fn main() {
+    say_hi();
+}

@@ -1,0 +1,24 @@
+/*
+   Run test: writing through pointers, indexing a stack buffer through a pointer, and taking addresses of locals.
+*/
+// expect-exit: 42
+
+module tests::run::pointers;
+
+fn write_through(p: *i32, value: i32) {
+    *p = value;
+}
+
+fn fill(dst: *u8, value: u8, bytes: usize) {
+    for (var i: usize = 0; i < bytes; i = i + 1) {
+        dst[i] = value;
+    }
+}
+
+fn main() -> i32 {
+    var x: i32 = 1;
+    write_through(&x, 40);
+    var byte: u8 = 0;
+    fill(&byte, 2, 1);
+    return x + @static_cast<i32>(byte);
+}

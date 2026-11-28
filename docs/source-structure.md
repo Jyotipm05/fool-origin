@@ -13,7 +13,7 @@ Contents: [1. Overview](#1-overview) · [2. Directory map](#2-directory-map) · 
 
 `foolc` is C++23, built from C++ modules (`.ixx` interface files, `.cpp` implementation units) with CMake + Ninja and
 clang. It is a front end: it reads Fool source, checks it, lowers function bodies to a typed high-level IR (HIR) and
-builds a control-flow graph (MIR) from that. There is no code generator yet.
+builds a control-flow graph (MIR) from that. A first backend turns the MIR into textual LLVM IR and lets clang link it.
 
 ```text
  .fo / .fl / .fex
@@ -30,6 +30,8 @@ builds a control-flow graph (MIR) from that. There is no code generator yet.
  hir::lower_module  typed, resolved, desugared bodies; generics monomorphized   (--dump-hir)
         ▼
  mir::lower         basic blocks, explicit evaluation order, places; mir::verify    (--dump-mir)
+        ▼
+ llvm::emit         textual LLVM IR; main.cpp then runs clang                       (--emit-llvm, --build)
 ```
 
 ---
@@ -78,7 +80,11 @@ src/
 │   ├── Toml.ixx / .cpp       module fool.toml: the TOML reader (tables, strings, numbers, arrays, inline tables), `merge`
 │   ├── TomlSelfTest.cpp      `--toml-selftest`
 │   └── Manifest.ixx / .cpp   module fool.manifest: `fool.toml` + `overwrite.toml` -> Manifest, `locate_package`
-└── Codegen/ …                placeholders (see §9)
+└── Codegen/
+    ├── LLVM/
+    │   ├── LLVMCodeGen.ixx   module fool.llvm: EmitOptions, EmitResult, SkippedFunction, emit
+    │   └── LLVMCodeGen.cpp   the Emitter: types, places, rvalues, terminators, the C `main` wrapper
+    └── …                     BackendInterface and Native/FastEmitter: placeholders (see §9)
 
 stdlib/       the standard library in Fool: core, io, sync, async, net, math, sys (.fo/.fl/.fex triads)
 examples/     small programs used as documentation and as part of the project-wide check
@@ -165,13 +171,14 @@ projections. Blocks that nothing reaches (the code after a `return`) are removed
 | `fool.borrow` | `Sema/BorrowChecker.ixx` | `BorrowCheckerPass` |
 | `fool.hir` | `HIR/` | `Type`, `TypeTable`, `Expr`, `Stmt`, `Function`, `Module`, `lower_module`, `dump` |
 | `fool.mir` | `MIR/` | `Place`, `Operand`, `Rvalue`, `Statement`, `Terminator`, `Block`, `Function`, `Module`, `lower`, `verify`, `dump` |
+| `fool.llvm` | `Codegen/LLVM/` | `EmitOptions`, `EmitResult`, `SkippedFunction`, `emit` |
 | `fool.bmi` | `Module/` | `Sha256`, `BMICacheManager`, the codec |
 | `fool.toml` | `Module/Toml.*` | `toml::Value`, `parse`, `merge` |
 | `fool.manifest` | `Module/Manifest.*` | `Manifest`, `load_manifest`, `locate_package`, `version_matches` |
 
 Dependency order, each importing only what is above it: `common` → `diagnostics` → `lexer` → `ast` → `parser`;
 `sema` uses `ast` and `parser`; `borrow` and `hir` use `sema`; `mir` uses `hir` (it never looks at the AST or the checker
-again); `bmi` uses `parser` and `ast`; `manifest` uses `toml` and `diagnostics`, and `sema` uses `manifest`; `main.cpp` uses all.
+again); `llvm` uses `mir`; `bmi` uses `parser` and `ast`; `manifest` uses `toml` and `diagnostics`, and `sema` uses `manifest`; `main.cpp` uses all.
 
 ---
 
@@ -259,12 +266,14 @@ passes in ctest, CLion and CI (not as a failing command rescued by `PASS_REGULAR
 | `tests/reflection/` | `--dump-reflection` golden files | `reflection` |
 | `tests/hir/` | `--dump-hir` golden files | `hir` |
 | `tests/mir/` | `--dump-mir` golden files; the verifier runs on each dump. Also `foolc_mir_selftest` and `foolc_mir_project` (every function of `stdlib/` + `examples/`) | `mir` |
+| `tests/llvm/` | `--emit-llvm` golden IR files (also with `--bmi-roundtrip`) and the two `--build` refusals (unsupported functions, no `fn main`) | `llvm` |
+| `tests/run/` | programs built with `--build`, run, and checked against `// expect-exit: N` and `// expect-output: text` (`tests/run_program.cmake`); registered only when a `clang` is found | `llvm;run` |
 | `tests/project/` | multi-file module graphs (ok, cycle, unresolved, bad template, interface-only, ...) and visibility (`vis_ok`, `vis_private`: one run per expected message) | `project` |
 | `tests/project/pkg_*` | `fool.toml` / `overwrite.toml`: local and shared packages, overrides, renamed folders, version and git-source errors, broken manifests; run with `--show-packages`. Also `foolc_toml_selftest` (the TOML reader and version matching) | `packages` |
 | `tests/cache/` | the `.flbmi` cache cycle | `bmi` |
 
 Golden tests run through `tests/calls/run_golden.cmake`, which runs `foolc -q <flag> <file>` and compares the output with
-the `.expected` file. The `calls`, `types`, `reflection`, `hir` and `mir` groups run a second time with `--bmi-roundtrip`
+the `.expected` file. The `calls`, `types`, `reflection`, `hir`, `mir` and `llvm` groups run a second time with `--bmi-roundtrip`
 (`*_roundtrip`, label `bmi`). To refresh a golden file after an intended change, regenerate it with the same command
 and review the diff. The whole `stdlib/` + `examples/` workspace is also checked in project mode, with and without the
 borrow checker and for several `--target`s.
@@ -287,7 +296,9 @@ ctest --test-dir build -j
 
 ## 9. Not built yet
 
-- `src/Codegen/` (`BackendInterface`, `LLVM/LLVMCodeGen`, `Native/FastEmitter`), `src/Module/ModuleGraph.ixx` and
-  `src/Module/PatchOverlay.ixx` are empty placeholders for the planned back ends and are not part of the build.
-- Optimization passes, SSA, linking, and everything after MIR (code generation).
+- `src/Codegen/BackendInterface`, `Native/FastEmitter`, `src/Module/ModuleGraph.ixx` and `src/Module/PatchOverlay.ixx` are empty
+  placeholders and are not part of the build.
+- Backend work beyond M1: layout of classes, structs and enums, optionals, strings and static data, globals, method and
+  ruleset dispatch, lambdas, cross-module symbols and project-mode builds, a runtime, and the native emitter.
+- Optimization passes and SSA.
 - A language server; the editor extensions are syntax highlighting only.

@@ -37,6 +37,7 @@ import fool.sema;
 import fool.borrow;
 import fool.hir;
 import fool.mir;
+import fool.llvm;
 import fool.bmi;
 import fool.manifest;
 
@@ -61,6 +62,11 @@ struct Options {
     bool m_dump_reflection{false};
     bool m_dump_hir{false};
     bool m_dump_mir{false};
+    bool m_emit_llvm{false};          ///< --emit-llvm: print the LLVM IR
+    bool m_build{false};              ///< --build: write the IR, let clang produce the executable
+    bool m_keep_ll{false};            ///< --keep-ll: keep `<output>.ll` after a build
+    fs::path m_output;                ///< -o
+    std::string m_clang;              ///< --clang (else $FOOL_CLANG, else `clang`)
     bool m_mir_selftest{false};
     bool m_use_cache{false};
     fs::path m_cache_dir;
@@ -136,6 +142,87 @@ std::string build_mir(const fool::TypeCheckerPass2& checker, const fool::SymbolT
     return fool::mir::dump(module);
 }
 
+/// HIR -> MIR -> LLVM IR for the checked module. A verifier failure is a compiler bug and is reported as an error.
+fool::llvm::EmitResult emit_llvm(const fool::TypeCheckerPass2& checker, const fool::SymbolTablePass0& pass0, fool::DiagnosticEngine& diag,
+                                 const std::string& module_name) {
+    const fool::mir::Module module = fool::mir::lower(fool::hir::lower_module(checker, pass0));
+    for (const std::string& problem : fool::mir::verify(module)) diag.error(fool::SourceSpan{}, "internal error: invalid MIR: " + problem);
+    fool::llvm::EmitOptions emit_options;
+    emit_options.m_module_name = module_name;
+    return fool::llvm::emit(module, emit_options);
+}
+
+/// True when `text` can be put between double quotes on a command line as it is.
+bool is_plain_argument(const std::string& text) {
+    return text.find_first_of("\"\r\n") == std::string::npos && !text.empty();
+}
+
+/// `--build`: writes the IR next to the output and lets clang compile and link it. Reports why it cannot, and returns success.
+bool build_executable(const Options& options, const fs::path& source, const fool::llvm::EmitResult& result, fool::DiagnosticEngine& diag) {
+    if (!result.m_skipped.empty()) {
+        std::string list;
+        for (const fool::llvm::SkippedFunction& skipped : result.m_skipped) list += "\n  " + skipped.m_name + ": " + skipped.m_reason;
+        diag.error(fool::SourceSpan{}, "cannot build: " + std::to_string(result.m_skipped.size()) +
+                                           " function(s) cannot be compiled to LLVM yet:" + list);
+        return false;
+    }
+    for (const std::string& problem : result.m_problems) diag.error(fool::SourceSpan{}, "cannot build: " + problem);
+    if (!result.m_problems.empty()) return false;
+    if (!result.m_has_main) {
+        diag.error(fool::SourceSpan{}, "cannot build: the program has no 'fn main()' (it takes no parameters and returns nothing or i32)");
+        return false;
+    }
+
+    fs::path output = options.m_output;
+    if (output.empty()) {
+        output = source.stem();
+#ifdef _WIN32
+        output.replace_extension(".exe");
+#endif
+    }
+    const fs::path ll_path = fs::path(output.string() + ".ll");
+    std::string clang = !options.m_clang.empty() ? options.m_clang : std::string();
+    if (clang.empty()) {
+        // std::getenv is flagged as unsafe by the MSVC runtime (-Wdeprecated-declarations); _dupenv_s is its replacement.
+#ifdef _MSC_VER
+        char* env = nullptr;
+        size_t env_size = 0;
+        if (_dupenv_s(&env, &env_size, "FOOL_CLANG") == 0 && env != nullptr && *env != '\0') clang = env;
+        std::free(env);
+#else
+        if (const char* env = std::getenv("FOOL_CLANG"); env != nullptr && *env != '\0') clang = env;
+#endif
+        if (clang.empty()) clang = "clang";
+    }
+    if (!is_plain_argument(clang) || !is_plain_argument(output.string())) {
+        diag.error(fool::SourceSpan{}, "cannot build: the clang or output path contains a quote or a line break");
+        return false;
+    }
+    {
+        std::ofstream file(ll_path, std::ios::binary);
+        file << result.m_ir;
+        if (!file) {
+            diag.error(fool::SourceSpan{}, "cannot build: cannot write '" + ll_path.string() + "'");
+            return false;
+        }
+    }
+    std::string command = "\"" + clang + "\" -O1 -Wno-override-module -x ir \"" + ll_path.string() + "\" -o \"" + output.string() + "\"";
+#ifdef _WIN32
+    command = "\"" + command + "\"";   // cmd.exe strips one pair of outer quotes
+#endif
+    const int status = std::system(command.c_str());
+    if (!options.m_keep_ll) {
+        std::error_code ignored;
+        fs::remove(ll_path, ignored);
+    }
+    if (status != 0) {
+        diag.error(fool::SourceSpan{}, "cannot build: '" + clang + "' failed (status " + std::to_string(status) + "); is clang installed? use --clang <path> or FOOL_CLANG");
+        return false;
+    }
+    if (!options.m_quiet) std::cout << "foolc: built '" << output.string() << "'\n";
+    return true;
+}
+
 void print_cache_stats(const Options& options) {
     if (options.m_quiet || !options.m_cache->uses_disk()) return;
     const fool::BMIStats& stats = options.m_cache->stats();
@@ -168,6 +255,11 @@ void print_usage() {
         "  --dump-hir             lower the checked functions to HIR and print it (unsupported ones are listed with the reason)\n"
         "  --mir-selftest         check that the MIR verifier reports hand-built broken graphs\n"
         "  --dump-mir             build the MIR control-flow graph from the HIR, verify it, and print it\n"
+        "  --emit-llvm            compile the MIR to LLVM IR text and print it (functions it cannot emit yet are listed as comments)\n"
+        "  --build                compile one file to an executable through clang: foolc --build prog.fl -o prog\n"
+        "  -o <path>              output of --build (default: the file's name)\n"
+        "  --clang <path>         the clang used by --build (default: $FOOL_CLANG, else `clang` on the PATH)\n"
+        "  --keep-ll              keep <output>.ll after --build\n"
         "  --cache                reuse parsed files from the .flbmi cache in .fool_cache/bmi\n"
         "  --cache-dir <dir>      like --cache, with an explicit cache directory\n"
         "  --bmi-roundtrip        debug: check every file on the tree decoded from its encoded .flbmi form\n"
@@ -231,6 +323,11 @@ void check_single_file(const fs::path& path, const std::string& source, const fo
     if (options.m_dump_reflection && !diag.has_errors()) std::cout << checker.reflection_report();
     if (options.m_dump_hir && !diag.has_errors()) std::cout << fool::hir::dump(fool::hir::lower_module(checker, pass0));
     if (options.m_dump_mir && !diag.has_errors()) std::cout << build_mir(checker, pass0, diag);
+    if ((options.m_emit_llvm || options.m_build) && !diag.has_errors()) {
+        const fool::llvm::EmitResult result = emit_llvm(checker, pass0, diag, std::string(fool::StringInterner::get().resolve(module->m_module_name)));
+        if (options.m_emit_llvm && !diag.has_errors()) std::cout << result.m_ir;
+        if (options.m_build && !diag.has_errors()) (void)build_executable(options, path, result, diag);
+    }
 }
 
 struct Expectation {
@@ -393,6 +490,12 @@ check_module_group(const fool::ModuleGraphPass1& graph, const fool::ModuleNode& 
         std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " mir:\n";
         std::cout << build_mir(checker, *table, diag);
     }
+    if (options.m_emit_llvm && !diag.has_errors()) {
+        const fool::llvm::EmitResult result = emit_llvm(checker, *table, diag, std::string(fool::StringInterner::get().resolve(node.m_name)));
+        if (!diag.has_errors()) {
+            std::cout << "module " << fool::StringInterner::get().resolve(node.m_name) << " llvm:\n" << result.m_ir;
+        }
+    }
     return table;
 }
 
@@ -486,6 +589,16 @@ int main(const int argc, char** argv) {
             options.m_mir_selftest = true;
         } else if (arg == "--dump-mir") {
             options.m_dump_mir = true;
+        } else if (arg == "--emit-llvm") {
+            options.m_emit_llvm = true;
+        } else if (arg == "--build") {
+            options.m_build = true;
+        } else if (arg == "--keep-ll") {
+            options.m_keep_ll = true;
+        } else if (arg == "-o" && i + 1 < argc) {
+            options.m_output = argv[++i];
+        } else if (arg == "--clang" && i + 1 < argc) {
+            options.m_clang = argv[++i];
         } else if (arg == "--show-packages") {
             options.m_show_packages = true;
         } else if (arg == "--graph") {
@@ -533,6 +646,10 @@ int main(const int argc, char** argv) {
         options.m_cache = std::make_shared<fool::BMICacheManager>(dir, options.m_bmi_roundtrip);
     }
 
+    if (options.m_build && (options.m_project || options.m_files.size() != 1)) {
+        std::cerr << "foolc: --build takes exactly one source file (project builds are not available yet)\n";
+        return 2;
+    }
     if (options.m_files.empty()) options.m_project = true; // default: check the whole workspace
     if (options.m_project) {
         if (options.m_roots.empty()) {

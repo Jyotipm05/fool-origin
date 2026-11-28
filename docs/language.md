@@ -622,7 +622,9 @@ missed error is possible but a wrong one should not be.
   downloads them yet. A `git = "..."` dependency is recorded and reported as needing the package manager. Version
   requirements are a plain prefix match, with no ranges, resolution or lock file.
 - **Types inside namespaces.**
-- **Code generation.** The compiler parses, checks, lowers to HIR and builds a control-flow graph (MIR); nothing executes yet.
+- **Code generation beyond the first step.** `foolc --build` already compiles programs made of integers, floats, bools, pointers,
+  control flow and calls through LLVM IR and clang (README, "LLVM backend (M1)"). Aggregates (classes, structs, enums, optionals),
+  strings, globals, lambdas and calls between modules are not emitted yet.
 - **Optimization, linking.**
 - **More pattern matching.** `match` covers enum variants and their payload (see above). There are no nested patterns,
   no matching on integers or strings, and no guards.

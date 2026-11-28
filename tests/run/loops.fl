@@ -1,0 +1,39 @@
+/*
+   Run test: loops, recursion and calls between functions; prints "ok" and exits with the fibonacci number.
+*/
+// expect-exit: 55
+// expect-output: sum 45\nok\n
+
+module tests::run::loops;
+
+@extern("C", link_name = "putchar")
+fn put_char(c: i32) -> i32;
+
+fn fib(n: i32) -> i32 {
+    if (n < 2) {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn put_digit(d: i32) {
+    put_char(48 + d);
+}
+
+fn main() -> i32 {
+    var sum: i32 = 0;
+    for (var i: i32 = 0; i < 10; i = i + 1) {
+        sum = sum + i;
+    }
+    put_char(115);
+    put_char(117);
+    put_char(109);
+    put_char(32);
+    put_digit(sum / 10);
+    put_digit(sum % 10);
+    put_char(10);
+    put_char(111);
+    put_char(107);
+    put_char(10);
+    return fib(10);
+}
