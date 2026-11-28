@@ -1,0 +1,48 @@
+// HIR: `match` as an expression: `(match subject [pattern => value] ...)`. Every arm value is converted to the type
+// of the whole match, the context's when it gives one, otherwise the first arm's.
+// Expected output: match_expr.expected
+
+module tests::hir::match_expr;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Mode {
+    Read,
+    Write,
+}
+
+fn area(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r * r * 3.0,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0.0,
+    };
+}
+
+fn code(mode: Mode) -> i32 {
+    const c = match mode {
+        Mode::Read => 1,
+        _ => 2,
+    };
+    return c;
+}
+
+fn widen(mode: Mode) -> i64 {
+    // the declared type is the context: the arms are widened to it
+    const c: i64 = match mode {
+        Mode::Read => 1,
+        Mode::Write => 2,
+    };
+    return c;
+}
+
+fn skip(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Rect(w, _) => w,
+        _ => 0.0,
+    };
+}

@@ -1,0 +1,70 @@
+module tests::match_expr_errors;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Other {
+    A,
+}
+
+fn not_exhaustive(shape: Shape) -> f64 {
+    // expect-error: match is not exhaustive: missing Shape::Rect, Shape::Empty (or add a '_' arm)
+    return match shape {
+        Shape::Circle(r) => r,
+    };
+}
+
+fn duplicate_arm(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r,
+        // expect-error: variant 'Shape::Circle' is already handled by an earlier arm
+        Shape::Circle(radius) => radius,
+        _ => 0.0,
+    };
+}
+
+fn after_wildcard(shape: Shape) -> f64 {
+    return match shape {
+        _ => 0.0,
+        // expect-error: this arm can never run: an earlier '_' arm already matches everything
+        Shape::Empty => 1.0,
+    };
+}
+
+fn wrong_arity(shape: Shape) -> f64 {
+    return match shape {
+        // expect-error: variant 'Shape::Rect' carries 2 value(s), but the pattern binds 1
+        Shape::Rect(w) => 1.0,
+        _ => 0.0,
+    };
+}
+
+fn mixed_enums(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Empty => 1.0,
+        // expect-error: all arms of a match must name the same enum: expected 'Shape', found 'Other'
+        Other::A => 2.0,
+        _ => 0.0,
+    };
+}
+
+fn wrong_subject(count: i32) -> f64 {
+    // expect-error: match value has type 'i32', but its arms name enum 'Shape'
+    return match count {
+        Shape::Empty => 1.0,
+        _ => 0.0,
+    };
+}
+
+fn different_types(shape: Shape) -> f64 {
+    const v: f64 = match shape {
+        Shape::Circle(r) => r,
+        // expect-error: the arms of a match give different types
+        Shape::Rect(w, h) => true,
+        _ => 0.0,
+    };
+    return v;
+}

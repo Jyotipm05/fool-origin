@@ -1,0 +1,4 @@
+module tests::enum_values_syntax_errors3;
+
+// expect-error: Expected '{' after enum name
+enum Mode: u8;

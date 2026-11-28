@@ -1,0 +1,14 @@
+module tests::match_expr_syntax_errors2;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn missing_comma(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r
+        // expect-error: Expected ',' after the value of a match arm, found '_'
+        _ => 0.0
+    };
+}

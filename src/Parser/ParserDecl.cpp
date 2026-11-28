@@ -713,8 +713,16 @@ EnumDeclNode* Parser::parse_enum() {
     Token name = consume(TokenKind::Identifier, "Expected enum name");
     en->m_name = name.m_symbol_id;
     if (check(TokenKind::Less)) en->m_type_params = parse_generic_params();
+    if (match(TokenKind::Colon)) {   // `enum Mode: u8`: the integer type of the variant values
+        en->m_underlying = parse_type();
+        if (en->m_underlying == nullptr) return en;
+    }
 
-    consume(TokenKind::OpenBrace, "Expected '{' after enum name");
+    if (!match(TokenKind::OpenBrace)) {
+        error_here("Expected '{' after enum name, found '" + describe(current()) + "'");
+        synchronize_declaration();
+        return en;
+    }
     while (!check(TokenKind::CloseBrace) && !is_at_end()) {
         EnumVariant variant;
         variant.m_span.m_start = current().m_span.m_start;
@@ -729,6 +737,12 @@ EnumDeclNode* Parser::parse_enum() {
                 if (!match(TokenKind::Comma)) break;
             }
             consume(TokenKind::CloseParen, "Expected ')' after variant payload types");
+        }
+        if (match(TokenKind::Equal)) {   // `Read = 2`
+            variant.m_value = parse_expression();
+            if (variant.m_value == nullptr) {   // reported; skip to the next variant
+                while (!check(TokenKind::Comma) && !check(TokenKind::CloseBrace) && !is_at_end()) advance();
+            }
         }
         variant.m_span.m_end = previous_end();
         en->m_variants.push_back(std::move(variant));
@@ -865,6 +879,92 @@ StmtNode* Parser::parse_while() {
     return stmt;
 }
 
+bool Parser::parse_match_pattern(MatchArm& arm) {
+    const SourceLocation arm_start = current().m_span.m_start;
+    if (check(TokenKind::Identifier) && current().m_raw_lexeme == "_" && peek().m_kind == TokenKind::FatArrow) {
+        advance();
+        arm.m_wildcard = true;
+        return true;
+    }
+    // `Enum::Variant` with an optional `(a, b, _)`
+    while (true) {
+        Token segment = consume(TokenKind::Identifier, "Expected a variant like 'Shape::Circle' or '_' as a match pattern");
+        if (segment.m_kind != TokenKind::Identifier) return false;
+        arm.m_path.push_back(segment.symbol_id());
+        if (!match(TokenKind::DoubleColon)) break;
+    }
+    if (arm.m_path.size() != 2) {
+        error(span_from(arm_start), "A match pattern names a variant as 'Enum::Variant'");
+    }
+    if (match(TokenKind::OpenParen)) {
+        arm.m_has_bindings = true;
+        while (!check(TokenKind::CloseParen) && !is_at_end()) {
+            MatchBinding binding;
+            binding.m_span = current().m_span;
+            Token name = consume(TokenKind::Identifier, "Expected a name for the payload value (or '_')");
+            if (name.m_kind != TokenKind::Identifier) return false;
+            binding.m_name = name.symbol_id();
+            binding.m_ignored = name.m_raw_lexeme == "_";
+            arm.m_bindings.push_back(binding);
+            if (!match(TokenKind::Comma)) break;
+        }
+        consume(TokenKind::CloseParen, "Expected ')' after the payload names");
+    }
+    return true;
+}
+
+ExprNode* Parser::parse_match_expression() {
+    SourceLocation start = current().m_span.m_start;
+    advance(); // 'match'
+    auto* expr = m_arena.create<MatchExpr>();
+
+    bool saved_no_struct = m_no_struct_literal;
+    bool saved_angle = m_in_angle_list;
+    m_no_struct_literal = true;
+    m_in_angle_list = false;
+    expr->m_subject = parse_expression();
+    m_no_struct_literal = saved_no_struct;
+    m_in_angle_list = saved_angle;
+    if (expr->m_subject == nullptr) return nullptr;
+    if (!check(TokenKind::OpenBrace)) {
+        error_here("Expected '{' after the value of 'match', found '" + describe(current()) + "'");
+        return nullptr;
+    }
+    advance();
+
+    while (!check(TokenKind::CloseBrace) && !is_at_end()) {
+        MatchArm arm;
+        const SourceLocation arm_start = current().m_span.m_start;
+        if (!parse_match_pattern(arm)) return nullptr;
+        consume(TokenKind::FatArrow, "Expected '=>' after the match pattern");
+        if (check(TokenKind::OpenBrace)) {
+            error_here("An arm of a 'match' expression gives a value, not a block: write 'Shape::Empty => 0.0,'");
+            (void)parse_block();   // skip the block so it does not cascade into more errors
+            if (!match(TokenKind::Comma)) { if (check(TokenKind::CloseBrace)) break; }
+            continue;
+        }
+        saved_no_struct = m_no_struct_literal;
+        saved_angle = m_in_angle_list;
+        m_no_struct_literal = false;
+        m_in_angle_list = false;
+        arm.m_value = parse_expression();
+        m_no_struct_literal = saved_no_struct;
+        m_in_angle_list = saved_angle;
+        if (arm.m_value == nullptr) return nullptr;
+        arm.m_span = span_from(arm_start);
+        expr->m_arms.push_back(std::move(arm));
+        if (match(TokenKind::Comma)) continue;   // arms are separated by commas; the last one may omit it
+        if (check(TokenKind::CloseBrace)) break;
+        // Report the missing comma and read on as if it were there, so one slip is one error.
+        error_here("Expected ',' after the value of a match arm, found '" + describe(current()) + "'");
+        if (is_at_end()) break;
+    }
+    consume(TokenKind::CloseBrace, "Expected '}' to close 'match'");
+    if (expr->m_arms.empty()) error(span_from(start), "A 'match' needs at least one arm");
+    expr->m_span = span_from(start);
+    return expr;
+}
+
 StmtNode* Parser::parse_match() {
     SourceLocation start = current().m_span.m_start;
     advance(); // 'match'
@@ -888,35 +988,7 @@ StmtNode* Parser::parse_match() {
     while (!check(TokenKind::CloseBrace) && !is_at_end()) {
         MatchArm arm;
         const SourceLocation arm_start = current().m_span.m_start;
-        if (check(TokenKind::Identifier) && current().m_raw_lexeme == "_" && peek().m_kind == TokenKind::FatArrow) {
-            advance();
-            arm.m_wildcard = true;
-        } else {
-            // `Enum::Variant` with an optional `(a, b, _)`
-            while (true) {
-                Token segment = consume(TokenKind::Identifier, "Expected a variant like 'Shape::Circle' or '_' as a match pattern");
-                if (segment.m_kind != TokenKind::Identifier) { synchronize_statement(); return nullptr; }
-                arm.m_path.push_back(segment.symbol_id());
-                if (!match(TokenKind::DoubleColon)) break;
-            }
-            if (arm.m_path.size() != 2) {
-                error(span_from(arm_start), "A match pattern names a variant as 'Enum::Variant'");
-            }
-            if (match(TokenKind::OpenParen)) {
-                arm.m_has_bindings = true;
-                while (!check(TokenKind::CloseParen) && !is_at_end()) {
-                    MatchBinding binding;
-                    binding.m_span = current().m_span;
-                    Token name = consume(TokenKind::Identifier, "Expected a name for the payload value (or '_')");
-                    if (name.m_kind != TokenKind::Identifier) { synchronize_statement(); return nullptr; }
-                    binding.m_name = name.symbol_id();
-                    binding.m_ignored = name.m_raw_lexeme == "_";
-                    arm.m_bindings.push_back(binding);
-                    if (!match(TokenKind::Comma)) break;
-                }
-                consume(TokenKind::CloseParen, "Expected ')' after the payload names");
-            }
-        }
+        if (!parse_match_pattern(arm)) { synchronize_statement(); return nullptr; }
         consume(TokenKind::FatArrow, "Expected '=>' after the match pattern");
         arm.m_body = parse_block();
         if (arm.m_body == nullptr) { synchronize_statement(); return nullptr; }

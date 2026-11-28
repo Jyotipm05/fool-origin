@@ -108,6 +108,7 @@ void dump_expression_types(const fool::TypeCheckerPass2& checker) {
         if (dynamic_cast<const fool::BooleanLiteralExpr*>(e)) return "bool";
         if (dynamic_cast<const fool::NullLiteralExpr*>(e)) return "null";
         if (dynamic_cast<const fool::LambdaExpr*>(e)) return "lambda";
+        if (dynamic_cast<const fool::MatchExpr*>(e)) return "match";
         if (dynamic_cast<const fool::IdentifierExpr*>(e)) return "ident";
         if (dynamic_cast<const fool::PathExpr*>(e)) return "path";
         if (dynamic_cast<const fool::UnaryExpr*>(e)) return "unary";

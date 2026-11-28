@@ -79,6 +79,7 @@ private:
     ExprNode* parse_primary();
     ExprNode* parse_path_expression();
     ExprNode* parse_intrinsic_call();
+    ExprNode* parse_match_expression();                                ///< `match v { Enum::Variant(a) => expr, _ => expr }`
     ExprNode* parse_named_cast(SourceLocation start, std::string_view name, CastKind kind);
     ExprNode* parse_number();
     [[nodiscard]] bool looks_like_struct_body() const;
@@ -123,6 +124,7 @@ private:
     StmtNode* parse_while();
     StmtNode* parse_for();
     StmtNode* parse_match();
+    bool parse_match_pattern(MatchArm& arm);                           ///< the pattern of one arm; false after a reported error
     StmtNode* parse_conditional_stmt();
     void synchronize_statement();
 };

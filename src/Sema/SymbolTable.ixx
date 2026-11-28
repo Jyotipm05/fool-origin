@@ -143,6 +143,30 @@ private:
     [[nodiscard]] std::optional<ConstValue> fail(const ExprNode* expr, bool report, std::string message) const;
 };
 
+/// One problem found in the values of an enum, with where to report it.
+struct EnumValueProblem {
+    // 1. Member variables FIRST
+    SourceSpan m_span;
+    std::string m_message;
+};
+
+/// The value of every variant of an enum, in declaration order (see `evaluate_enum_values`).
+struct EnumValues {
+    // 1. Member variables FIRST
+    std::vector<int64_t> m_values;            ///< the variant's value; 0 where `m_known` is false
+    std::vector<bool> m_known;                ///< false after a problem with that variant's value
+    std::vector<EnumValueProblem> m_problems;
+};
+
+/**
+ * Works out the values of an enum's variants: `Read = 2` takes its constant integer, a variant without one takes the
+ * previous value plus one (0 for the first). Every value must fit the underlying type (`i32` when none is written) and
+ * be unique; a variant with a payload may only have a value when the underlying type is written. Nothing is reported
+ * here: the problems are returned, so the checker can report them and HIR lowering can refuse them.
+ */
+EnumValues evaluate_enum_values(const EnumDeclNode& en, const ConstTable& constants, unsigned pointer_width, DiagnosticEngine& diag,
+                                SymbolID qualified_namespace = INVALID_SYMBOL_ID);
+
 /// Renders a type for diagnostics and signature comparison, e.g. `const& Span<u8>`.
 std::string type_to_string(const TypeNode* type);
 
@@ -572,6 +596,9 @@ private:
     void check_block_scoped(const BlockStmt* block);
     /// `match`: the arms name variants of one enum, bind its payload, and must cover every variant (or end with `_`).
     void check_match(const MatchStmt* match);
+    /// `match` as an expression: the same arms, each giving a value; the arms must agree on one type.
+    void check_match_expression(const MatchExpr* match);
+    void check_match_arms(const ExprNode* subject, const std::vector<MatchArm>& arms, const SourceSpan& span, const MatchExpr* value);
     [[nodiscard]] bool always_returns(const std::vector<StmtNode*>& stmts) const;
     [[nodiscard]] bool stmt_always_returns(const StmtNode* stmt) const;
     [[nodiscard]] bool stmt_always_exits(const StmtNode* stmt) const;   ///< returns, breaks, continues or calls a `-> !` function
@@ -604,6 +631,8 @@ private:
     [[nodiscard]] std::optional<uint64_t> type_alignment(const StaticType& type, unsigned depth = 0) const;
     [[nodiscard]] std::string describe(const StaticType& type) const;
     void check_named_cast(const CastExpr* cast);
+    /// `as` and `@static_cast` between an enum and an integer; false when neither side is an enum (nothing was checked).
+    bool check_enum_cast(const CastExpr* cast);
 
     // expressions
     void check_expression(const ExprNode* expr);

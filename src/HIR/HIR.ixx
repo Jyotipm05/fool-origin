@@ -75,6 +75,9 @@ public:
     [[nodiscard]] std::string text(TypeId id) const;
 };
 
+struct Stmt;
+struct Expr;
+
 enum class ExprKind : uint8_t {
     IntLit,     ///< m_int
     FloatLit,   ///< m_float
@@ -96,7 +99,19 @@ enum class ExprKind : uint8_t {
     Unwrap,     ///< `T?` -> `T`; the checker proved the optional holds a value
     Wrap,       ///< `T` -> `T?`
     StructLit,  ///< operands in field declaration order
-    EnumLit     ///< a variant of an enum: m_type is the enum, m_index the variant, m_text `Enum::Variant`; operands are the payload in order
+    EnumLit,    ///< a variant of an enum: m_type is the enum, m_index the variant, m_text `Enum::Variant`; operands are the payload in order
+    Match       ///< operands[0] is the enum value; m_arms, each giving a value of m_type (see MatchCase::m_value)
+};
+
+/// One arm of a Match, statement or expression (HIR): the variant it handles (or everything else, for `_`) and the locals bound to the payload.
+struct MatchCase {
+    // 1. Member variables
+    bool m_wildcard{false};
+    size_t m_variant{0};                 ///< index into the enum's variants
+    std::vector<LocalId> m_bindings;     ///< one per payload value (NO_LOCAL for `_`); empty when the pattern named no payload
+    std::vector<Stmt> m_body;            ///< statement form
+    std::unique_ptr<Expr> m_value;       ///< expression form: the arm's result, already converted to the type of the match
+    SourceSpan m_span;
 };
 
 struct Expr {
@@ -114,6 +129,7 @@ struct Expr {
     size_t m_index{0};
     const FunctionDeclNode* m_callee{nullptr};
     std::vector<std::unique_ptr<Expr>> m_operands;
+    std::vector<MatchCase> m_arms;              ///< Match
 };
 
 enum class StmtKind : uint8_t {
@@ -127,18 +143,6 @@ enum class StmtKind : uint8_t {
     Continue,
     Block,      ///< m_body, a scope of its own
     Match       ///< subject m_expr (an enum value); m_arms, each with its own scope
-};
-
-struct Stmt;
-
-/// One arm of a Match (HIR): the variant it handles (or everything else, for `_`) and the locals bound to the payload.
-struct MatchCase {
-    // 1. Member variables
-    bool m_wildcard{false};
-    size_t m_variant{0};                 ///< index into the enum's variants
-    std::vector<LocalId> m_bindings;     ///< one per payload value (NO_LOCAL for `_`); empty when the pattern named no payload
-    std::vector<Stmt> m_body;
-    SourceSpan m_span;
 };
 
 struct Stmt {
@@ -174,6 +178,7 @@ struct EnumVariantInfo {
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
     std::vector<TypeId> m_payload;
+    int64_t m_value{0};                  ///< the variant's number: `Read = 2`, else the previous value + 1 (0 for the first)
 };
 
 /// A (non-generic) enum that some lowered code mentions: a Named type whose variants are listed in declaration order.
@@ -181,6 +186,8 @@ struct EnumInfo {
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
     const EnumDeclNode* m_decl{nullptr};
+    TypeId m_underlying{NO_TYPE};        ///< `enum Mode: u8`: the integer type of the values; NO_TYPE when not written
+    bool m_valued{false};                ///< the declaration wrote the underlying type or at least one explicit value
     std::vector<EnumVariantInfo> m_variants;
 
     // 2. Member functions

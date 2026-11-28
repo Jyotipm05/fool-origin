@@ -1,0 +1,41 @@
+// HIR: an enum with an underlying type and explicit values is listed as `enum Mode: u8 { Read = 2, .. }`, with every
+// variant's value (the previous one + 1 where none is written). A cast of an enum to an integer keeps its kind:
+// `as` is `cast.unchecked`, `@static_cast` is `cast.static`.
+// Expected output: enum_values.expected
+
+module tests::hir::enum_values;
+
+enum Mode: u8 {
+    Read = 2,
+    Write = 5,
+    Send = 3,
+    Rec = 1
+}
+
+enum Level {
+    Low,
+    Mid = 10,
+    High,
+}
+
+enum Packet: u8 {
+    Ping = 1,
+    Data(u32) = 7,
+    Ack(u32, u32),
+}
+
+fn code(mode: Mode) -> u8 {
+    return mode as u8;
+}
+
+fn wide(mode: Mode) -> i64 {
+    return @static_cast<i64>(mode);
+}
+
+fn level() -> i32 {
+    return Level::High as i32;
+}
+
+fn packet(n: u32) -> Packet {
+    return Packet::Data(n);
+}

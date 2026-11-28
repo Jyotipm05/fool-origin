@@ -42,7 +42,7 @@ constexpr int MAX_DEPTH = 1000;
 enum Tag : uint8_t {
     // expressions
     ExprNull = 0, ExprInt = 1, ExprFloat, ExprString, ExprBool, ExprIdent, ExprPath, ExprUnary, ExprBinary,
-    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral, ExprLambda,
+    ExprCast, ExprMember, ExprIndex, ExprCall, ExprIntrinsic, ExprStruct, ExprNullLiteral, ExprLambda, ExprMatch,
     // statements
     StmtReturn = 1, StmtExpr, StmtDecl, StmtBlock, StmtIf, StmtWhile, StmtFor, StmtBreak, StmtContinue, StmtConditional, StmtMatch,
     // declarations
@@ -181,6 +181,16 @@ private:
         for (const ExprNode* e : v) expr(e);
     }
 
+    void match_arms(const std::vector<MatchArm>& arms) {
+        count(arms.size());
+        for (const MatchArm& arm : arms) {
+            syms(arm.m_path); boolean(arm.m_wildcard); boolean(arm.m_has_bindings);
+            count(arm.m_bindings.size());
+            for (const MatchBinding& binding : arm.m_bindings) { sym(binding.m_name); boolean(binding.m_ignored); span(binding.m_span); }
+            stmt(arm.m_body); expr(arm.m_value); span(arm.m_span);
+        }
+    }
+
     void expr(const ExprNode* e) {
         if (e == nullptr) { u8(ExprNull); return; }
         DepthGuard guard(*this);
@@ -220,6 +230,9 @@ private:
             u8(ExprStruct); span(n->m_span); type(n->m_type);
             count(n->m_fields.size());
             for (const FieldInit& f : n->m_fields) { sym(f.m_name); expr(f.m_value); span(f.m_span); }
+        } else if (auto* n = dynamic_cast<const MatchExpr*>(e)) {
+            u8(ExprMatch); span(n->m_span); expr(n->m_subject);
+            match_arms(n->m_arms);
         } else if (auto* n = dynamic_cast<const LambdaExpr*>(e)) {
             u8(ExprLambda); span(n->m_span); decl(n->m_function);
             count(n->m_captures.size());
@@ -255,13 +268,7 @@ private:
             u8(StmtFor); span(n->m_span); stmt(n->m_init); expr(n->m_condition); expr(n->m_step); stmt(n->m_body);
         } else if (auto* n = dynamic_cast<const MatchStmt*>(s)) {
             u8(StmtMatch); span(n->m_span); expr(n->m_subject);
-            count(n->m_arms.size());
-            for (const MatchArm& arm : n->m_arms) {
-                syms(arm.m_path); boolean(arm.m_wildcard); boolean(arm.m_has_bindings);
-                count(arm.m_bindings.size());
-                for (const MatchBinding& binding : arm.m_bindings) { sym(binding.m_name); boolean(binding.m_ignored); span(binding.m_span); }
-                stmt(arm.m_body); span(arm.m_span);
-            }
+            match_arms(n->m_arms);
         } else if (dynamic_cast<const BreakStmt*>(s) != nullptr) {
             u8(StmtBreak); span(s->m_span);
         } else if (dynamic_cast<const ContinueStmt*>(s) != nullptr) {
@@ -376,12 +383,13 @@ private:
         }
         case DeclEnum: {
             const auto* n = static_cast<const EnumDeclNode*>(d);
-            sym(n->m_name); generic_params(n->m_type_params);
+            sym(n->m_name); generic_params(n->m_type_params); type(n->m_underlying);
             count(n->m_variants.size());
             for (const EnumVariant& v : n->m_variants) {
                 sym(v.m_name);
                 count(v.m_payload.size());
                 for (const TypeNode* t : v.m_payload) type(t);
+                expr(v.m_value);
                 span(v.m_span);
             }
             break;
@@ -678,6 +686,14 @@ private:
             result = n;
             break;
         }
+        case ExprMatch: {
+            sp = span();
+            auto* n = m_arena.create<MatchExpr>();
+            n->m_subject = expr();
+            match_arms(n->m_arms);
+            result = n;
+            break;
+        }
         case ExprIntrinsic: {
             sp = span();
             auto* n = m_arena.create<IntrinsicCallExpr>();
@@ -714,6 +730,28 @@ private:
         uint32_t n = count(1);
         for (uint32_t i = 0; i < n && m_ok; ++i) out.push_back(stmt());
         return out;
+    }
+
+    void match_arms(std::vector<MatchArm>& out) {
+        uint32_t arms = count(8);
+        for (uint32_t i = 0; i < arms && m_ok; ++i) {
+            MatchArm arm;
+            arm.m_path = syms();
+            arm.m_wildcard = boolean();
+            arm.m_has_bindings = boolean();
+            uint32_t bindings = count(8);
+            for (uint32_t j = 0; j < bindings && m_ok; ++j) {
+                MatchBinding binding;
+                binding.m_name = sym();
+                binding.m_ignored = boolean();
+                binding.m_span = span();
+                arm.m_bindings.push_back(binding);
+            }
+            arm.m_body = block();
+            arm.m_value = expr();
+            arm.m_span = span();
+            out.push_back(std::move(arm));
+        }
     }
 
     BlockStmt* block() {
@@ -768,24 +806,7 @@ private:
         case StmtMatch: {
             auto* n = m_arena.create<MatchStmt>();
             n->m_subject = expr();
-            uint32_t arms = count(8);
-            for (uint32_t i = 0; i < arms && m_ok; ++i) {
-                MatchArm arm;
-                arm.m_path = syms();
-                arm.m_wildcard = boolean();
-                arm.m_has_bindings = boolean();
-                uint32_t bindings = count(8);
-                for (uint32_t j = 0; j < bindings && m_ok; ++j) {
-                    MatchBinding binding;
-                    binding.m_name = sym();
-                    binding.m_ignored = boolean();
-                    binding.m_span = span();
-                    arm.m_bindings.push_back(binding);
-                }
-                arm.m_body = block();
-                arm.m_span = span();
-                n->m_arms.push_back(std::move(arm));
-            }
+            match_arms(n->m_arms);
             result = n;
             break;
         }
@@ -956,12 +977,14 @@ private:
             auto* n = static_cast<EnumDeclNode*>(d);
             n->m_name = sym();
             n->m_type_params = generic_params();
-            uint32_t variants = count(12);
+            n->m_underlying = type();
+            uint32_t variants = count(13);
             for (uint32_t i = 0; i < variants && m_ok; ++i) {
                 EnumVariant v;
                 v.m_name = sym();
                 uint32_t payload = count(1);
                 for (uint32_t j = 0; j < payload && m_ok; ++j) v.m_payload.push_back(type());
+                v.m_value = expr();
                 v.m_span = span();
                 n->m_variants.push_back(std::move(v));
             }

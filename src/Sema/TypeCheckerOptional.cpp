@@ -133,6 +133,9 @@ void TypeCheckerPass2::kill_assigned_in(const ExprNode* expr) {
         for (const ExprNode* arg : intrinsic->m_args) kill_assigned_in(arg);
     } else if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(expr)) {
         for (const FieldInit& field : literal->m_fields) kill_assigned_in(field.m_value);
+    } else if (const auto* match = dynamic_cast<const MatchExpr*>(expr)) {
+        kill_assigned_in(match->m_subject);
+        for (const MatchArm& arm : match->m_arms) kill_assigned_in(arm.m_value);
     }
 }
 

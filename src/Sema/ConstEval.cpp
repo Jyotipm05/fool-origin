@@ -302,4 +302,73 @@ std::optional<ConstValue> ConstEvaluator::eval_binary(const BinaryExpr* expr, bo
     }
 }
 
+EnumValues evaluate_enum_values(const EnumDeclNode& en, const ConstTable& constants, unsigned pointer_width, DiagnosticEngine& diag,
+                                SymbolID qualified_namespace) {
+    EnumValues out;
+    const std::string enum_name(StringInterner::get().resolve(en.m_name));
+    const auto problem = [&](const SourceSpan& span, std::string message) { out.m_problems.push_back({span, std::move(message)}); };
+
+    // The type the values must fit: the written one, `i32` otherwise.
+    ScalarType type{ScalarType::Kind::Int, 32, true};
+    std::string type_name = "i32";
+    if (en.m_underlying != nullptr) {
+        type = scalar_type_of(en.m_underlying, pointer_width);
+        type_name = type_to_string(en.m_underlying);
+        if (type.m_kind != ScalarType::Kind::Int) {
+            problem(en.m_underlying->m_span, "the underlying type of enum '" + enum_name + "' must be an integer type, found '" + type_name + "'");
+            type = {ScalarType::Kind::Int, 64, true};   // keep going with a wide type so the values are still checked
+        }
+    }
+
+    const ConstEvaluator evaluator(constants, diag, pointer_width, qualified_namespace);
+    int64_t next = 0;
+    bool have_next = true;
+    for (size_t i = 0; i < en.m_variants.size(); ++i) {
+        const EnumVariant& variant = en.m_variants[i];
+        const std::string variant_name(StringInterner::get().resolve(variant.m_name));
+        int64_t value = next;
+        bool known = have_next;
+        if (variant.m_value != nullptr) {
+            if (!variant.m_payload.empty() && en.m_underlying == nullptr) {
+                problem(variant.m_span, "variant '" + variant_name + "' carries a payload and has a value: give the enum its underlying type, e.g. 'enum " +
+                                            enum_name + ": u8'");
+            }
+            const auto evaluated = evaluator.evaluate(variant.m_value, /*report=*/false);
+            if (!evaluated || evaluated->m_kind != ConstValue::Kind::Int) {
+                problem(variant.m_value->m_span, "the value of variant '" + variant_name + "' must be a constant integer");
+                known = false;
+            } else {
+                value = evaluated->m_int;
+                known = true;
+            }
+        } else if (!have_next) {
+            known = false;   // follows a variant whose value is unknown: already reported
+        } else if (i != 0 && !fits(value, type)) {
+            problem(variant.m_span, "variant '" + variant_name + "' follows the largest value of '" + type_name + "'; give it an explicit value");
+            known = false;
+        }
+        if (known && !fits(value, type)) {
+            problem(variant.m_value != nullptr ? variant.m_value->m_span : variant.m_span,
+                    "value " + std::to_string(value) + " of variant '" + variant_name + "' does not fit in '" + type_name + "'");
+            known = false;
+        }
+        if (known) {
+            for (size_t j = 0; j < i; ++j) {
+                if (out.m_known[j] && out.m_values[j] == value) {
+                    problem(variant.m_span, "variant '" + variant_name + "' has the value " + std::to_string(value) + ", which variant '" +
+                                                std::string(StringInterner::get().resolve(en.m_variants[j].m_name)) + "' already has");
+                    break;
+                }
+            }
+        }
+        out.m_values.push_back(known ? value : 0);
+        out.m_known.push_back(known);
+        have_next = known;
+        if (known) {
+            if (__builtin_add_overflow(value, int64_t{1}, &next)) have_next = false;
+        }
+    }
+    return out;
+}
+
 } // namespace fool

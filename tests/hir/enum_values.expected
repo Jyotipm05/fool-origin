@@ -1,0 +1,20 @@
+enum Mode: u8 { Read = 2, Write = 5, Send = 3, Rec = 1 }
+enum Level { Low = 0, Mid = 10, High = 11 }
+enum Packet: u8 { Ping = 1, Data(u32) = 7, Ack(u32, u32) = 8 }
+
+fn code(mode: Mode) -> u8 {
+  return (cast.unchecked:u8 mode#0);
+}
+
+fn wide(mode: Mode) -> i64 {
+  return (cast.static:i64 mode#0);
+}
+
+fn level() -> i32 {
+  return (cast.unchecked:i32 (variant Level::High));
+}
+
+fn packet(n: u32) -> Packet {
+  return (variant Packet::Data n#0);
+}
+// 4 of 4 function(s) lowered

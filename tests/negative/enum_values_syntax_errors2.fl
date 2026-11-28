@@ -1,0 +1,6 @@
+module tests::enum_values_syntax_errors2;
+
+// expect-error: Expected enum name
+enum : u8 {
+    A,
+}

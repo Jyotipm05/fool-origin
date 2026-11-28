@@ -247,6 +247,9 @@ void BorrowCheckerPass::walk_expr(const ExprNode* expr) {
         for (const ExprNode* arg : intrinsic->m_args) walk_expr(arg);
     } else if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(expr)) {
         for (const FieldInit& field : literal->m_fields) walk_expr(field.m_value);
+    } else if (const auto* match = dynamic_cast<const MatchExpr*>(expr)) {
+        walk_expr(match->m_subject);
+        for (const MatchArm& arm : match->m_arms) walk_expr(arm.m_value);
     } else if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
         // The body is its own function (its captures are plain names to it); it is checked once this function is done.
         if (m_mode == Mode::Check && lambda->m_function != nullptr) m_lambdas.push_back(lambda->m_function);

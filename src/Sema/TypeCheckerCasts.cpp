@@ -271,6 +271,7 @@ StaticType TypeCheckerPass2::compute_type(const ExprNode* expr) {
         function.m_pointee = std::make_shared<StaticType>(std::move(result));
         return function;
     }
+    if (dynamic_cast<const MatchExpr*>(expr) != nullptr) return {};   // recorded by check_match_arms, which sees the arms' scopes
     if (const auto* intrinsic = dynamic_cast<const IntrinsicCallExpr*>(expr)) return reflection_result_type(intrinsic);
     if (const auto* call = dynamic_cast<const CallExpr*>(expr)) {
         if (const auto* callee_id = dynamic_cast<const IdentifierExpr*>(call->m_callee); callee_id != nullptr && is_builtin_serialize(callee_id->m_identifier)) {
@@ -573,6 +574,53 @@ bool int_value_fits(int64_t value, unsigned bits, bool is_signed) {
 }
 
 } // namespace
+
+bool TypeCheckerPass2::check_enum_cast(const CastExpr* cast) {
+    using Kind = StaticType::Kind;
+    if (cast->m_cast_kind != CastKind::Unchecked && cast->m_cast_kind != CastKind::Static) return false;
+    const StaticType target = static_type_of(cast->m_target);
+    const StaticType source = infer_type(cast->m_operand);
+    const EnumDeclNode* to = target.m_kind == Kind::Named ? m_pass0.find_enum(target.m_name) : nullptr;
+    const EnumDeclNode* from = source.m_kind == Kind::Named ? m_pass0.find_enum(source.m_name) : nullptr;
+    if (to == nullptr && from == nullptr) return false;
+    const std::string spelling = cast->m_cast_kind == CastKind::Static ? "@static_cast" : "'as'";
+
+    if (to != nullptr) {
+        if (from != to) {
+            m_diag.error(cast->m_span, spelling + " cannot produce enum '" + std::string(text_of(to->m_name)) + "' from '" + describe(source) +
+                                           "': not every value names a variant");
+        }
+        return true;
+    }
+    for (const EnumVariant& variant : from->m_variants) {
+        if (!variant.m_payload.empty()) {
+            m_diag.error(cast->m_span, "enum '" + std::string(text_of(from->m_name)) + "' has variants with a payload and cannot be cast to a number; use 'match'");
+            return true;
+        }
+    }
+    if (!target.known()) return true;   // a generic parameter: checked after instantiation
+    if (target.m_kind != Kind::Int || target.m_literal) {
+        m_diag.error(cast->m_span, spelling + " can turn enum '" + std::string(text_of(from->m_name)) + "' only into an integer type, found '" + describe(target) + "'");
+        return true;
+    }
+    if (cast->m_cast_kind == CastKind::Static) {
+        // value-preserving: every variant's value must fit the target ('as' wraps instead)
+        const EnumValues values = evaluate_enum_values(*from, visible_constants(), m_pass0.target().m_pointer_width, m_diag);
+        for (size_t i = 0; i < values.m_values.size(); ++i) {
+            if (!values.m_known[i]) continue;
+            const int64_t value = values.m_values[i];
+            const bool fits = target.m_bits >= 64 ? (target.m_signed || value >= 0)
+                              : target.m_signed ? (value >= -(int64_t{1} << (target.m_bits - 1)) && value <= (int64_t{1} << (target.m_bits - 1)) - 1)
+                                                : (value >= 0 && value <= (int64_t{1} << target.m_bits) - 1);
+            if (!fits) {
+                m_diag.error(cast->m_span, "@static_cast of enum '" + std::string(text_of(from->m_name)) + "' to '" + describe(target) + "' would lose the value " +
+                                               std::to_string(value) + " of variant '" + std::string(text_of(from->m_variants[i].m_name)) + "'; use 'as' to wrap explicitly");
+                break;
+            }
+        }
+    }
+    return true;
+}
 
 void TypeCheckerPass2::check_named_cast(const CastExpr* cast) {
     using Kind = StaticType::Kind;

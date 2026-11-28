@@ -1,0 +1,12 @@
+module tests::match_expr_syntax_errors3;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn no_arms(shape: Shape) -> f64 {
+    // expect-error: A 'match' needs at least one arm
+    return match shape {
+    };
+}

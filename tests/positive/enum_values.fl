@@ -1,0 +1,73 @@
+// `enum Name: type { Variant = value, .. }`: variants with numbers, and the cast to the number.
+
+module tests::enum_values_ok;
+
+constx BASE = 100;
+
+enum Mode: u8 {
+    Read = 2,
+    Write = 5,
+    Send = 3,
+    Rec = 1
+}
+
+// a variant without a value takes the previous value + 1; the first one is 0
+enum Level {
+    Low,
+    Mid = 10,
+    High,
+    Top,
+}
+
+enum Signed: i8 {
+    Down = -128,
+    Zero = 0,
+    Up = 127,
+}
+
+// values can be constant expressions, including named constants
+enum Port: u16 {
+    Http = BASE + 80 - 100,
+    Alt = BASE * 80 + 8,
+    Next,
+}
+
+// a variant that carries a payload can have a value when the underlying type is written
+enum Packet: u8 {
+    Ping = 1,
+    Data(u32) = 7,
+    Ack(u32, u32),
+}
+
+fn code(mode: Mode) -> u8 {
+    return mode as u8;
+}
+
+fn widened(mode: Mode) -> i64 {
+    // @static_cast keeps every value: u8 fits in i64
+    return @static_cast<i64>(mode);
+}
+
+fn level_number(level: Level) -> i32 {
+    return level as i32 + Level::Top as i32;
+}
+
+fn describe(mode: Mode) -> i32 {
+    return match mode {
+        Mode::Read => 1,
+        Mode::Write => 2,
+        Mode::Send => 3,
+        Mode::Rec => 4,
+    };
+}
+
+fn same(a: Mode, b: Mode) -> bool {
+    return a == b;
+}
+
+fn is_ping(packet: Packet) -> bool {
+    return match packet {
+        Packet::Ping => true,
+        _ => false,
+    };
+}

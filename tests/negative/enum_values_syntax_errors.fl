@@ -1,0 +1,8 @@
+module tests::enum_values_syntax_errors;
+
+enum Missing: u8 {
+    A = 1,
+    // expect-error: Expected expression
+    B = ,
+    C = 3,
+}

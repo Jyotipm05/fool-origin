@@ -225,6 +225,15 @@ Example: `match` touched `KwMatch` / `FatArrow` (lexer), `MatchStmt` / `MatchArm
 `kill_assigned_in`, the borrow checker's `walk_statement`, HIR's `Match` statement (`MatchCase`), and in MIR the `Payload`
 projection and the `Switch` terminator (builder, block pruning and renumbering, printer, verifier and its selftest).
 
+Example: explicit enum values touched `EnumDeclNode::m_underlying` and `EnumVariant::m_value` (AST), `parse_enum`, the codec
+(version 8 → 9), `evaluate_enum_values` (`Sema/ConstEval.cpp`, used by both the checker and HIR lowering, so they cannot
+disagree), `check_enum_cast`, and HIR's `EnumInfo::m_underlying` / `EnumVariantInfo::m_value` with the dump.
+
+Example: `match` as an expression touched `MatchExpr` and `MatchArm::m_value` (AST), `parse_match_expression` / `parse_match_pattern`
+(parser; a primary expression starting with `match`), `ExprMatch` in the codec (version 7 → 8), `check_match_arms` (shared with
+the statement, plus the common arm type, recorded in `m_expr_types`), `kill_assigned_in` and the borrow checker's `walk_expr`, HIR's
+`Match` expression (`MatchCase::m_value`), and in MIR `lower_match_value` (the result temporary and the join block).
+
 ---
 
 ## 7. Tests

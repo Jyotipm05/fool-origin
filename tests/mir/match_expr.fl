@@ -1,0 +1,43 @@
+// MIR: `match` as a value switches on the variant like the statement does, but every arm stores its value in one
+// result temporary and then jumps to a shared join block; the value is read from that temporary after the join.
+// Expected output: match_expr.expected
+
+module tests::mir::match_expr;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Mode {
+    Read,
+    Write,
+}
+
+fn area(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r * r * 3.0,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0.0,
+    };
+}
+
+fn pick(mode: Mode) -> i32 {
+    return match mode {
+        Mode::Read => 1,
+        _ => 2,
+    };
+}
+
+// a match as an operand of a larger expression, with another match inside an arm
+fn combined(shape: Shape, mode: Mode) -> f64 {
+    const scale = match mode {
+        Mode::Read => match shape {
+            Shape::Empty => 1.0,
+            _ => 2.0,
+        },
+        Mode::Write => 3.0,
+    };
+    return scale + match mode { Mode::Read => 0.5, _ => 0.0 };
+}

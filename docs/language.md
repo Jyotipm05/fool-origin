@@ -261,6 +261,38 @@ enum Shape {
 - Struct literal: `Vec2 { x: 1.0, y: 2.0 }`; an optional field that the literal leaves out starts as `null`.
 - Duplicate fields, variants and definitions are errors.
 
+#### Enums with numbers
+
+An enum can give its variants numbers and an underlying integer type:
+
+```fool
+enum Mode: u8 {
+    Read = 2,
+    Write = 5,
+    Send = 3,
+    Rec = 1
+}
+
+enum Level { Low, Mid = 10, High, Top }     // Low = 0, Mid = 10, High = 11, Top = 12
+
+const code: u8 = Mode::Read as u8;           // 2
+const wide = @static_cast<i64>(Mode::Send);  // 3
+```
+
+- `: type` after the name is the underlying type: `i8`..`i64`, `u8`..`u64`, `isize` or `usize`. It is optional; without
+  it the values are checked against `i32`.
+- A variant without `= value` takes the previous value plus one; the first one is 0. A value is a constant integer
+  expression (literals, named constants, `+ - * / % & | ^`, unary `-`, casts), so `Http = BASE + 80` works.
+- Every value must fit the underlying type and be **unique** within the enum. A variant that follows the largest value of
+  its type must be given a value explicitly.
+- A variant that carries a payload may have a value too (`Data(u32) = 7`), but only when the underlying type is written.
+- `enum as integer` gives the variant's value. `as` converts like any `as` cast (wrapping if the type is too small);
+  `@static_cast` is value-preserving and refuses a target type that cannot hold every variant's value.
+- The other direction is **not** allowed: `n as Mode` and `@static_cast<Mode>(n)` are errors, because not every number names
+  a variant. An enum whose variants carry payloads cannot be cast to a number at all; use `match`.
+- Matching, `==` and `!=` work on the variants and do not depend on the numbers; the values are what the enum becomes
+  when it is stored or sent. There is no `Mode::from(n)` yet; it would return an optional value.
+
 ### Generics
 
 ```fool
@@ -452,10 +484,38 @@ match shape {
 - Every variant must be covered, or the last arm must be `_`: `match is not exhaustive: missing Shape::Rect (or add a '_'
   arm)`. A variant handled twice, an arm after `_`, a variant the enum does not have, and arms naming different enums are
   errors. The value must be the enum the arms name.
-- `match` is a statement, not an expression: it has no value, and an arm's block is not a value either. A function whose
-  every arm returns counts as returning on all paths.
+- A `match` that starts a statement is the statement form above: it has no value, and a function whose every arm returns
+  counts as returning on all paths. Anywhere an expression is expected, `match` is an expression (next section).
 - Not yet: nested patterns, matching on integers or strings, guards (`if`), and generic enums (they check, but are not
   lowered to HIR yet).
+
+#### `match` as an expression
+
+`match` gives a value when it is used where an expression belongs: after `return`, `=` or `const`/`var`, as an
+operand, as an argument, or inside another arm. Each arm is `pattern => expression`, and arms are **separated by commas**
+(the last comma is optional).
+
+```fool
+fn area(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r * r * 3.14,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0.0,
+    };
+}
+
+const code: i32 = match mode { Mode::Read => 1, Mode::Write => 2, _ => 3 };
+```
+
+- The patterns, payload names, exhaustiveness and `_` rules are the same as for the statement. The payload names are
+  visible in their own arm's expression only.
+- An arm gives an expression, not a block: `Shape::Empty => { 0.0 }` is an error (there are no block expressions). Only
+  the first token decides the form, so to use a `match` as the first thing of an expression statement, put it in
+  parentheses.
+- All arms must agree on one type: the first arm with a known type sets it and every other arm must convert to it
+  (`the arms of a match give different types: ...`). With a declared type (`const c: i64 = match ...`) the arms are
+  converted to that type.
+- Only one arm runs; the others are not evaluated.
 
 ### `break`, `continue`, `return`
 
@@ -561,7 +621,7 @@ missed error is possible but a wrong one should not be.
 - **Code generation.** The compiler parses, checks, lowers to HIR and builds a control-flow graph (MIR); nothing executes yet.
 - **Optimization, linking.**
 - **More pattern matching.** `match` covers enum variants and their payload (see above). There are no nested patterns,
-  no matching on integers or strings, no guards, and no `match` as an expression.
+  no matching on integers or strings, and no guards.
 - **Ruleset conformance** (declaring and checking that a class satisfies a ruleset) and the runtime test behind
   `@dynamic_cast`.
 - **Iteration over collections** and any use of `in`; compound assignment and `++` / `--`.

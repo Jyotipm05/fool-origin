@@ -36,7 +36,7 @@ using HirStmt = hir::Stmt;
 
 /// True when evaluating the expression can run a call.
 bool has_call(const HirExpr& e) {
-    if (e.m_kind == hir::ExprKind::Call) return true;
+    if (e.m_kind == hir::ExprKind::Call || e.m_kind == hir::ExprKind::Match) return true;   // a match runs arbitrary arms
     for (const HirExprPtr& operand : e.m_operands) {
         if (has_call(*operand)) return true;
     }
@@ -377,6 +377,7 @@ private:
             case hir::ExprKind::Binary:
                 if (e.m_op == TokenKind::AmpAmp || e.m_op == TokenKind::PipePipe) return lower_short_circuit(e);
                 break;
+            case hir::ExprKind::Match: return lower_match_value(e);
             case hir::ExprKind::Assign:
                 lower_assignment(e);
                 return unit(e.m_type);
@@ -517,22 +518,16 @@ private:
         }
     }
 
-    /// `match`: the value is copied into a temporary, a switch picks the arm by variant, and an arm that names payload
-    /// values copies them out of the temporary into its locals before its body runs.
-    void lower_match(const HirStmt& s) {
-        Operand subject = spill(lower_value(*s.m_expr), s.m_span);
-        const Place held = subject.m_place;
-        const hir::Type& enum_type = m_hir.m_types.get(subject.m_type);
-        const hir::EnumInfo* info = m_hir.find_enum(enum_type.m_name);
-
-        const BlockId join = new_block();
+    /// Ends the current block with a switch on the variant held in `subject` and returns the block of every arm. A `_`
+    /// arm is the fallback; without one the fallback is an unreachable block (the checker proved the arms cover every variant).
+    std::vector<BlockId> switch_on_variant(const Operand& subject, const std::vector<hir::MatchCase>& arms, SourceSpan span) {
         std::vector<BlockId> arm_blocks;
         Terminator pick;
         pick.m_kind = TerminatorKind::Switch;
-        pick.m_span = s.m_span;
+        pick.m_span = span;
         pick.m_value = subject;
         BlockId fallback = NO_BLOCK;
-        for (const hir::MatchCase& arm : s.m_arms) {
+        for (const hir::MatchCase& arm : arms) {
             const BlockId block = new_block();
             arm_blocks.push_back(block);
             if (arm.m_wildcard) {
@@ -543,7 +538,7 @@ private:
                 if (!seen) pick.m_cases.push_back({arm.m_variant, block});
             }
         }
-        if (fallback == NO_BLOCK) {   // every variant has an arm (the checker proved it): nothing else can arrive
+        if (fallback == NO_BLOCK) {   // nothing else can arrive
             fallback = new_block();
             Block& dead = m_fn.m_blocks[fallback];
             dead.m_terminator.m_kind = TerminatorKind::Unreachable;
@@ -551,25 +546,64 @@ private:
         }
         pick.m_else = fallback;
         terminate(std::move(pick));
+        return arm_blocks;
+    }
 
+    /// At the start of an arm: copies the payload values the pattern names out of the matched value into their locals.
+    void bind_payload(const Place& held, const hir::EnumInfo* info, const hir::MatchCase& arm) {
+        for (size_t slot = 0; slot < arm.m_bindings.size(); ++slot) {
+            if (arm.m_bindings[slot] == hir::NO_LOCAL) continue;
+            Place payload = held;
+            Projection projection;
+            projection.m_kind = ProjectionKind::Payload;
+            projection.m_type = info->m_variants[arm.m_variant].m_payload[slot];
+            projection.m_variant = arm.m_variant;
+            projection.m_index = slot;
+            payload.m_projections.push_back(projection);
+            assign(local_place(arm.m_bindings[slot]), use(read(std::move(payload))), arm.m_span);
+        }
+    }
+
+    /// `match`: the value is copied into a temporary, a switch picks the arm by variant, and an arm that names payload
+    /// values copies them out of the temporary into its locals before its body runs.
+    void lower_match(const HirStmt& s) {
+        Operand subject = spill(lower_value(*s.m_expr), s.m_span);
+        const Place held = subject.m_place;
+        const hir::Type& enum_type = m_hir.m_types.get(subject.m_type);
+        const hir::EnumInfo* info = m_hir.find_enum(enum_type.m_name);
+
+        const BlockId join = new_block();
+        const std::vector<BlockId> arm_blocks = switch_on_variant(subject, s.m_arms, s.m_span);
         for (size_t i = 0; i < s.m_arms.size(); ++i) {
-            const hir::MatchCase& arm = s.m_arms[i];
             m_cur = arm_blocks[i];
-            for (size_t slot = 0; slot < arm.m_bindings.size(); ++slot) {
-                if (arm.m_bindings[slot] == hir::NO_LOCAL) continue;
-                Place payload = held;
-                Projection projection;
-                projection.m_kind = ProjectionKind::Payload;
-                projection.m_type = info->m_variants[arm.m_variant].m_payload[slot];
-                projection.m_variant = arm.m_variant;
-                projection.m_index = slot;
-                payload.m_projections.push_back(projection);
-                assign(local_place(arm.m_bindings[slot]), use(read(std::move(payload))), arm.m_span);
-            }
-            lower_block(arm.m_body);
+            bind_payload(held, info, s.m_arms[i]);
+            lower_block(s.m_arms[i].m_body);
             jump(join);
         }
         m_cur = join;
+    }
+
+    /// `match` as a value: like the statement, but each arm stores its value in one result temporary before the join.
+    Operand lower_match_value(const HirExpr& e) {
+        const HirExpr& subject_expr = *e.m_operands[0];
+        Operand subject = spill(lower_value(subject_expr), e.m_span);
+        const Place held = subject.m_place;
+        const hir::EnumInfo* info = m_hir.find_enum(m_hir.m_types.get(subject.m_type).m_name);
+        const bool is_void = m_hir.m_types.get(e.m_type).m_kind == hir::TypeKind::Void;
+        const LocalId result = is_void ? NO_LOCAL : temp(e.m_type);
+
+        const BlockId join = new_block();
+        const std::vector<BlockId> arm_blocks = switch_on_variant(subject, e.m_arms, e.m_span);
+        for (size_t i = 0; i < e.m_arms.size(); ++i) {
+            const hir::MatchCase& arm = e.m_arms[i];
+            m_cur = arm_blocks[i];
+            bind_payload(held, info, arm);
+            Operand value = lower_value(*arm.m_value);
+            if (!is_void) assign(local_place(result), use(std::move(value)), arm.m_span);
+            jump(join);
+        }
+        m_cur = join;
+        return is_void ? unit(e.m_type) : read(local_place(result));
     }
 
     // ---- cleanup -------------------------------------------------------------------------------

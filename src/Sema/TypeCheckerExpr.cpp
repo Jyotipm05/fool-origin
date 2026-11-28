@@ -114,6 +114,8 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
         if (m_strict_names && !is_known_name(id->m_identifier) && !is_generic_parameter(id->m_identifier)) {
             m_diag.error(expr->m_span, "use of undeclared identifier '" + name_of(id->m_identifier) + "'");
         }
+    } else if (const auto* match = dynamic_cast<const MatchExpr*>(expr)) {
+        check_match_expression(match);
     } else if (const auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
         check_lambda(lambda);
     } else if (const auto* path = dynamic_cast<const PathExpr*>(expr)) {
@@ -179,7 +181,7 @@ void TypeCheckerPass2::check_expression(const ExprNode* expr) {
     } else if (const auto* cast = dynamic_cast<const CastExpr*>(expr)) {
         check_expression(cast->m_operand);
         check_type_access(cast->m_target, cast->m_span);
-        if (cast->m_cast_kind != CastKind::Unchecked) check_named_cast(cast);
+        if (!check_enum_cast(cast) && cast->m_cast_kind != CastKind::Unchecked) check_named_cast(cast);
     } else if (const auto* member = dynamic_cast<const MemberExpr*>(expr)) {
         check_member_access(member);
     } else if (const auto* index = dynamic_cast<const IndexExpr*>(expr)) {

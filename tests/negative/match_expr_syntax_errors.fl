@@ -1,0 +1,14 @@
+module tests::match_expr_syntax_errors;
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn block_arm(shape: Shape) -> f64 {
+    return match shape {
+        // expect-error: An arm of a 'match' expression gives a value, not a block
+        Shape::Circle(r) => { return r; }
+        _ => 0.0,
+    };
+}

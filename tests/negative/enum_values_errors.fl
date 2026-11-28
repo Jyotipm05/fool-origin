@@ -1,0 +1,91 @@
+module tests::enum_values_errors;
+
+constx WIDE = 300;
+
+enum Dup: u8 {
+    Read = 2,
+    Write = 5,
+    // expect-error: variant 'Again' has the value 2, which variant 'Read' already has
+    Again = 2,
+}
+
+enum Narrow: u8 {
+    Small = 1,
+    // expect-error: value 300 of variant 'Big' does not fit in 'u8'
+    Big = 300,
+}
+
+enum Named: u8 {
+    // expect-error: value 300 of variant 'Wide' does not fit in 'u8'
+    Wide = WIDE,
+}
+
+enum Negative: u8 {
+    // expect-error: value -1 of variant 'Below' does not fit in 'u8'
+    Below = -1,
+}
+
+enum Implicit: u8 {
+    Last = 255,
+    // expect-error: variant 'Next' follows the largest value of 'u8'; give it an explicit value
+    Next,
+}
+
+enum Fractional {
+    // expect-error: the value of variant 'Half' must be a constant integer
+    Half = 1.5,
+}
+
+enum Unknown {
+    // expect-error: the value of variant 'Dynamic' must be a constant integer
+    Dynamic = missing_name,
+}
+
+// expect-error: the underlying type of enum 'NotInteger' must be an integer type, found 'f64'
+enum NotInteger: f64 {
+    A = 1,
+}
+
+enum NeedsType {
+    // expect-error: variant 'Data' carries a payload and has a value: give the enum its underlying type
+    Data(u32) = 3,
+}
+
+enum Mode: u8 {
+    Read = 1,
+    Write = 2,
+}
+
+enum Shape {
+    Circle(f64),
+    Empty,
+}
+
+fn from_number(n: u8) -> Mode {
+    // expect-error: 'as' cannot produce enum 'Mode' from 'u8': not every value names a variant
+    return n as Mode;
+}
+
+fn static_to_enum(n: u8) -> Mode {
+    // expect-error: @static_cast cannot produce enum 'Mode' from 'u8': not every value names a variant
+    return @static_cast<Mode>(n);
+}
+
+fn payload_number(shape: Shape) -> i32 {
+    // expect-error: enum 'Shape' has variants with a payload and cannot be cast to a number
+    return shape as i32;
+}
+
+fn to_float(mode: Mode) -> f64 {
+    // expect-error: 'as' can turn enum 'Mode' only into an integer type, found 'f64'
+    return mode as f64;
+}
+
+enum Big: u16 {
+    Huge = 300,
+}
+
+fn narrowing(big: Big) -> u8 {
+    // expect-error: @static_cast of enum 'Big' to 'u8' would lose the value 300 of variant 'Huge'
+    return @static_cast<u8>(big);
+}

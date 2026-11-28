@@ -135,6 +135,9 @@ Everything else is spelled as a named cast, `@name<T>(expr)`, and is validated b
 | `@reinterpret_cast<T>(x)` | pointer ⇄ pointer, pointer ⇄ **pointer-sized** integer (`usize` / `isize`, width taken from `--target`), `&T`/`*T` → `*U` | removing `const`, producing a reference, any other pair (it points you to `@static_cast` or `@bit_cast`) |
 | `@bit_cast<T>(x)` | reinterpret the bytes of a value as another type of **exactly the same size** (`f32` ⇄ `u32`, a struct ⇄ an integer, ...) | different sizes (both are printed), references, types of unknown size |
 
+An enum can be cast to an integer with `as` or `@static_cast` (the variant's value; `@static_cast` refuses an integer type that
+cannot hold every value); an integer cannot be cast to an enum, and an enum with payloads cannot be cast to a number.
+
 ```fool
 var bits  = @bit_cast<u32>(ratio);            // f32 -> u32, same 4 bytes
 var small = @static_cast<u8>(300);            // error: constant 300 does not fit in 'u8'
@@ -555,12 +558,15 @@ an omitted condition means "until `break`":
 }
 ```
 
-Enums that the lowered code mentions are listed first in the dump (`enum Shape { Circle(f64), Rect(f64, f64), Empty }`).
+Enums that the lowered code mentions are listed first in the dump (`enum Shape { Circle(f64), Rect(f64, f64), Empty }`;
+an enum with an underlying type or explicit values lists them: `enum Mode: u8 { Read = 2, Write = 5 }`, and casting an enum
+to an integer is a `cast` of the enum value).
 A value is a `(variant Enum::Variant payload…)` expression whose payload values are converted to the declared payload
 types, and `==` / `!=` are defined for enums whose variants carry no payload (ordering and comparing payload enums are
 reported as not lowerable, since the language does not define them). A payload is read back with `match`: the
 statement lowers to `match <value> { Enum::Variant(r#1, _) => { … } _ => { … } }`, each arm's names being locals of the
-variant's payload types.
+variant's payload types. `match` as an expression lowers to `(match <value> [Enum::Variant(r#1, _) => <expr>] [_ => <expr>])`,
+every arm value converted to the type of the whole match.
 
 What is not lowered is kept as `fn name: not lowerable yet: <reason> (line N)` instead of being skipped: lambdas, generic enums, qualified paths other than enum variants, constant generic arguments, async functions, reflection
 intrinsics, function values, calls the checker could not bind, types and generic definitions from modules that are not
@@ -600,7 +606,8 @@ fn sum(data: const* f32, length: usize) -> f32 {
 - **Control flow is blocks and jumps.** `if`, `while`, `for`, `break`, `continue` and early `return` become `goto`,
   `branch cond, then, else` and `return`. A `match` is `switch value [Variant -> bb, …], else bb` on a temporary holding the
   enum value; an arm copies its payload out with places such as `_4.Rect.1`, and when every variant has an arm the else
-  target is an `unreachable` block. `&&` and `||` become a branch that writes a bool temporary, so the right operand
+  target is an `unreachable` block; a `match` expression also gives each arm a store into one result temporary and a jump to
+  a shared join block. `&&` and `||` become a branch that writes a bool temporary, so the right operand
   only runs when it must. Code after a `return`/`break`/`continue` is dropped.
 - **Evaluation order is explicit.** A compound expression is a sequence of statements writing temporaries (`_4`, printed as
   `_index`). A value read from a variable or memory is copied into a temporary first when a later operand makes a call, so

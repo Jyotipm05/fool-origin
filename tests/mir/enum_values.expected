@@ -1,0 +1,28 @@
+fn code(mode: Mode) -> u8 {
+  let _1: u8;
+  bb0:
+    _1 = cast.unchecked:u8 mode#0
+    return _1
+}
+
+fn pick(mode: Mode) -> u8 {
+  let _1: Mode;
+  let _2: u8;
+  let _3: u8;
+  bb0:
+    _1 = mode#0
+    switch _1 [Read -> bb2, Write -> bb3], else bb4
+  bb1:
+    return _2
+  bb2:
+    _2 = 10:u8
+    goto bb1
+  bb3:
+    _2 = 20:u8
+    goto bb1
+  bb4:
+    _3 = cast.unchecked:u8 mode#0
+    _2 = _3
+    goto bb1
+}
+// 2 of 2 function(s) lowered

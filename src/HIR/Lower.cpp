@@ -315,9 +315,16 @@ private:
         info.m_name = en->m_name;
         info.m_decl = en;
         try {
+            const EnumValues values = evaluate_enum_values(*en, m_pass0.definitions(), m_pass0.target().m_pointer_width, m_pass0.diagnostics());
+            if (!values.m_problems.empty()) fail(values.m_problems.front().m_message, values.m_problems.front().m_span);
+            if (en->m_underlying != nullptr) info.m_underlying = lower_type(en->m_underlying);
+            info.m_valued = en->m_underlying != nullptr;
+            for (const EnumVariant& variant : en->m_variants) info.m_valued = info.m_valued || variant.m_value != nullptr;
+            size_t position = 0;
             for (const EnumVariant& variant : en->m_variants) {
                 EnumVariantInfo entry;
                 entry.m_name = variant.m_name;
+                entry.m_value = values.m_values[position++];
                 for (const TypeNode* payload : variant.m_payload) entry.m_payload.push_back(lower_type(payload));
                 info.m_variants.push_back(std::move(entry));
             }
@@ -897,6 +904,54 @@ private:
         }
     }
 
+    /// The pattern of one arm against enum `info`: pushes a scope holding the arm's payload names (the caller pops it).
+    [[nodiscard]] MatchCase lower_match_pattern(const MatchArm& arm, const EnumInfo& info) {
+        MatchCase lowered;
+        lowered.m_span = arm.m_span;
+        push_scope();
+        if (arm.m_wildcard) {
+            lowered.m_wildcard = true;
+            return lowered;
+        }
+        bool known = false;
+        for (size_t i = 0; i < info.m_variants.size(); ++i) {
+            if (info.m_variants[i].m_name == arm.m_path.back()) { lowered.m_variant = i; known = true; }
+        }
+        if (!known) fail("variant '" + name_of(arm.m_path.back()) + "' of '" + name_of(info.m_name) + "'", arm.m_span);
+        const EnumVariantInfo& variant = info.m_variants[lowered.m_variant];
+        if (arm.m_has_bindings && arm.m_bindings.size() == variant.m_payload.size()) {
+            for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
+                lowered.m_bindings.push_back(arm.m_bindings[i].m_ignored ? NO_LOCAL
+                                                                         : declare(arm.m_bindings[i].m_name, variant.m_payload[i], false, false));
+            }
+        }
+        return lowered;
+    }
+
+    /// `match value { Enum::A(x) => expr, _ => expr }` as a value: every arm is converted to one type, the expected
+    /// type when the context gives one, otherwise the type of the first arm.
+    [[nodiscard]] ExprPtr lower_match_expr(const MatchExpr* match, TypeId expected) {
+        ExprPtr subject = lower_expr(match->m_subject, NO_TYPE);
+        const Type& subject_type = ty(subject->m_type);
+        const EnumInfo* found = subject_type.m_kind == TypeKind::Named ? m_module.find_enum(subject_type.m_name) : nullptr;
+        if (found == nullptr) fail("a match on '" + m_module.m_types.text(subject->m_type) + "' (only non-generic enum values can be matched)", match->m_subject->m_span);
+        const EnumInfo info = *found;   // a copy: lowering an arm may register more enums
+        TypeId result = expected;
+        std::vector<MatchCase> arms;
+        for (const MatchArm& arm : match->m_arms) {
+            MatchCase lowered = lower_match_pattern(arm, info);
+            ExprPtr value = lower_expr(arm.m_value, result);
+            if (result == NO_TYPE) result = value->m_type;
+            lowered.m_value = coerce(std::move(value), result, arm.m_value->m_span);
+            pop_scope();
+            arms.push_back(std::move(lowered));
+        }
+        ExprPtr out = node(ExprKind::Match, result, match->m_span);
+        out->m_operands.push_back(std::move(subject));
+        out->m_arms = std::move(arms);
+        return out;
+    }
+
     /// `match value { Enum::A(x) => {...} _ => {...} }`: each arm gets locals for the payload it names.
     Stmt lower_match(const MatchStmt* match_stmt) {
         Stmt s = make_stmt(StmtKind::Match, match_stmt->m_span);
@@ -906,25 +961,7 @@ private:
         if (found == nullptr) fail("a match on '" + m_module.m_types.text(s.m_expr->m_type) + "' (only non-generic enum values can be matched)", match_stmt->m_subject->m_span);
         const EnumInfo info = *found;   // a copy: lowering an arm may register more enums
         for (const MatchArm& arm : match_stmt->m_arms) {
-            MatchCase lowered;
-            lowered.m_span = arm.m_span;
-            push_scope();
-            if (arm.m_wildcard) {
-                lowered.m_wildcard = true;
-            } else {
-                bool known = false;
-                for (size_t i = 0; i < info.m_variants.size(); ++i) {
-                    if (info.m_variants[i].m_name == arm.m_path.back()) { lowered.m_variant = i; known = true; }
-                }
-                if (!known) fail("variant '" + name_of(arm.m_path.back()) + "' of '" + name_of(info.m_name) + "'", arm.m_span);
-                const EnumVariantInfo& variant = info.m_variants[lowered.m_variant];
-                if (arm.m_has_bindings && arm.m_bindings.size() == variant.m_payload.size()) {
-                    for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
-                        lowered.m_bindings.push_back(arm.m_bindings[i].m_ignored ? NO_LOCAL
-                                                                                 : declare(arm.m_bindings[i].m_name, variant.m_payload[i], false, false));
-                    }
-                }
-            }
+            MatchCase lowered = lower_match_pattern(arm, info);   // opens the scope of the payload names
             lower_scoped(arm.m_body, lowered.m_body);
             pop_scope();
             s.m_arms.push_back(std::move(lowered));
@@ -1012,7 +1049,14 @@ private:
         if (const auto* binary = dynamic_cast<const BinaryExpr*>(e)) return lower_binary(binary, expected);
         if (const auto* cast = dynamic_cast<const CastExpr*>(e)) {
             ExprPtr operand = lower_expr(cast->m_operand, NO_TYPE);
-            ExprPtr out = node(ExprKind::Cast, lower_type(cast->m_target), e->m_span);
+            const TypeId target = lower_type(cast->m_target);
+            // An enum value can be turned into its number, never the other way round (the checker rejects that).
+            const Type& from_type = ty(operand->m_type);
+            if (from_type.m_kind == TypeKind::Named && m_module.find_enum(from_type.m_name) != nullptr) {
+                if (!m_module.find_enum(from_type.m_name)->is_plain()) fail("a cast of an enum with payloads", e->m_span);
+                if (ty(target).m_kind != TypeKind::Int) fail("a cast of an enum to a non-integer type", e->m_span);
+            }
+            ExprPtr out = node(ExprKind::Cast, target, e->m_span);
             out->m_cast = cast->m_cast_kind;
             out->m_operands.push_back(std::move(operand));
             return out;
@@ -1021,6 +1065,7 @@ private:
         if (const auto* index = dynamic_cast<const IndexExpr*>(e)) return lower_index(index);
         if (const auto* call = dynamic_cast<const CallExpr*>(e)) return lower_call(call);
         if (const auto* literal = dynamic_cast<const StructLiteralExpr*>(e)) return lower_struct_literal(literal);
+        if (const auto* match = dynamic_cast<const MatchExpr*>(e)) return lower_match_expr(match, expected);
         if (dynamic_cast<const LambdaExpr*>(e) != nullptr) fail("lambdas (closure conversion is not implemented)", e->m_span);
         if (dynamic_cast<const IntrinsicCallExpr*>(e) != nullptr) fail("compile-time intrinsics and reflection (not evaluated yet)", e->m_span);
         if (const auto* path = dynamic_cast<const PathExpr*>(e)) {

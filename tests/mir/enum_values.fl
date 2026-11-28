@@ -1,0 +1,23 @@
+// MIR: casting an enum to its number is a `cast` of the enum value; matching still switches on the variant, not the number.
+// Expected output: enum_values.expected
+
+module tests::mir::enum_values;
+
+enum Mode: u8 {
+    Read = 2,
+    Write = 5,
+    Send = 3,
+    Rec = 1
+}
+
+fn code(mode: Mode) -> u8 {
+    return mode as u8;
+}
+
+fn pick(mode: Mode) -> u8 {
+    return match mode {
+        Mode::Read => 10,
+        Mode::Write => 20,
+        _ => mode as u8,
+    };
+}

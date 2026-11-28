@@ -582,6 +582,8 @@ ExprNode* Parser::parse_primary() {
             return parse_path_expression();
         case TokenKind::At:
             return parse_intrinsic_call();
+        case TokenKind::KwMatch:
+            return parse_match_expression();
         case TokenKind::OpenParen: {
             if (looks_like_lambda(0)) return parse_lambda();
             advance();

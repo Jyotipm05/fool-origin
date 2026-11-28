@@ -80,14 +80,18 @@ public:
     // 3. Member functions
     std::string run() {
         for (const EnumInfo& info : m_module.m_enums) {
-            m_out += "enum " + name_of(info.m_name) + " {";
+            m_out += "enum " + name_of(info.m_name);
+            if (info.m_underlying != NO_TYPE) m_out += ": " + m_module.m_types.text(info.m_underlying);
+            m_out += " {";
             for (size_t i = 0; i < info.m_variants.size(); ++i) {
                 m_out += (i != 0 ? ", " : " ") + name_of(info.m_variants[i].m_name);
                 const std::vector<TypeId>& payload = info.m_variants[i].m_payload;
-                if (payload.empty()) continue;
-                m_out += "(";
-                for (size_t j = 0; j < payload.size(); ++j) m_out += (j != 0 ? ", " : "") + m_module.m_types.text(payload[j]);
-                m_out += ")";
+                if (!payload.empty()) {
+                    m_out += "(";
+                    for (size_t j = 0; j < payload.size(); ++j) m_out += (j != 0 ? ", " : "") + m_module.m_types.text(payload[j]);
+                    m_out += ")";
+                }
+                if (info.m_valued) m_out += " = " + std::to_string(info.m_variants[i].m_value);
             }
             m_out += " }\n";
         }
@@ -108,6 +112,20 @@ private:
     std::string local_text(LocalId id) const {
         const Local& local = m_fn->m_locals[id];
         return name_of(local.m_name) + "#" + std::to_string(id);
+    }
+
+    /// `_`, `Shape::Empty` or `Shape::Circle(r#1, _)`.
+    std::string pattern_text(const MatchCase& arm, const Type& subject, const EnumInfo* info) const {
+        if (arm.m_wildcard) return "_";
+        std::string text = name_of(subject.m_name) + "::" + name_of(info->m_variants[arm.m_variant].m_name);
+        if (!arm.m_bindings.empty()) {
+            text += "(";
+            for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
+                text += (i != 0 ? ", " : "") + (arm.m_bindings[i] == NO_LOCAL ? std::string("_") : local_text(arm.m_bindings[i]));
+            }
+            text += ")";
+        }
+        return text;
     }
 
     std::string expr_text(const Expr& e) const {
@@ -146,6 +164,15 @@ private:
             case ExprKind::EnumLit: {
                 std::string text = "(variant " + e.m_text;
                 for (size_t i = 0; i < e.m_operands.size(); ++i) text += " " + operand(i);
+                return text + ")";
+            }
+            case ExprKind::Match: {
+                const Type& subject = m_module.m_types.get(e.m_operands[0]->m_type);
+                const EnumInfo* info = m_module.find_enum(subject.m_name);
+                std::string text = "(match " + operand(0);
+                for (const MatchCase& arm : e.m_arms) {
+                    text += " [" + pattern_text(arm, subject, info) + " => " + expr_text(*arm.m_value) + "]";
+                }
                 return text + ")";
             }
             case ExprKind::StructLit: {
@@ -212,18 +239,7 @@ private:
                 m_out += "match " + expr_text(*s.m_expr) + " {\n";
                 for (const MatchCase& arm : s.m_arms) {
                     indent(depth + 1);
-                    if (arm.m_wildcard) {
-                        m_out += "_";
-                    } else {
-                        m_out += name_of(subject.m_name) + "::" + name_of(info->m_variants[arm.m_variant].m_name);
-                        if (!arm.m_bindings.empty()) {
-                            m_out += "(";
-                            for (size_t i = 0; i < arm.m_bindings.size(); ++i) {
-                                m_out += (i != 0 ? ", " : "") + (arm.m_bindings[i] == NO_LOCAL ? std::string("_") : local_text(arm.m_bindings[i]));
-                            }
-                            m_out += ")";
-                        }
-                    }
+                    m_out += pattern_text(arm, subject, info);
                     m_out += " => {\n";
                     print_block(arm.m_body, depth + 2);
                     indent(depth + 1);

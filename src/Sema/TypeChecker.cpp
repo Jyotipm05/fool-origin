@@ -407,6 +407,9 @@ namespace fool {
                                          en->m_name) + "'");
                     }
                 }
+                // `enum Mode: u8 { Read = 2, .. }`: values that are constant, fit the type and are unique
+                const EnumValues values = evaluate_enum_values(*en, m_pass0.definitions(), m_pass0.target().m_pointer_width, m_diag);
+                for (const EnumValueProblem &problem: values.m_problems) m_diag.error(problem.m_span, problem.m_message);
             }
         }
     }
@@ -811,11 +814,31 @@ namespace fool {
     }
 
     void TypeCheckerPass2::check_match(const MatchStmt *match) {
-        check_expression(match->m_subject);
+        check_match_arms(match->m_subject, match->m_arms, match->m_span, nullptr);
+    }
+
+    void TypeCheckerPass2::check_match_expression(const MatchExpr *match) {
+        check_match_arms(match->m_subject, match->m_arms, match->m_span, match);
+    }
+
+    /// The shared work of both forms of `match`. `value` is the expression form (arms give values, whose common type
+    /// becomes the type of `value`), or null for the statement form (arms are blocks).
+    void TypeCheckerPass2::check_match_arms(const ExprNode *subject_expr, const std::vector<MatchArm> &arms, const SourceSpan &match_span,
+                                            const MatchExpr *value) {
+        check_expression(subject_expr);
+        std::vector<std::pair<const ExprNode *, StaticType> > arm_types;   // expression form: each arm's value and its type
+        const auto check_arm_body = [&](const MatchArm &arm) {
+            if (value == nullptr) {
+                check_block_scoped(arm.m_body);
+            } else if (arm.m_value != nullptr) {
+                check_expression(arm.m_value);
+                arm_types.emplace_back(arm.m_value, infer_type(arm.m_value));   // while the payload names are still in scope
+            }
+        };
 
         const EnumDeclNode *enum_decl = nullptr;
         SymbolID enum_name = INVALID_SYMBOL_ID;
-        for (const MatchArm &arm: match->m_arms) {
+        for (const MatchArm &arm: arms) {
             if (arm.m_wildcard || arm.m_path.size() != 2) continue;
             enum_name = arm.m_path[0];
             enum_decl = m_pass0.find_enum(enum_name);
@@ -824,30 +847,30 @@ namespace fool {
 
         // The value must be of the enum the arms name (when the checker can tell what it is).
         if (enum_decl != nullptr) {
-            const StaticType subject = infer_type(match->m_subject);
+            const StaticType subject = infer_type(subject_expr);
             using Kind = StaticType::Kind;
             const bool plain_other = subject.m_kind == Kind::Int || subject.m_kind == Kind::Float || subject.m_kind == Kind::Bool ||
                                      subject.m_kind == Kind::Void || subject.m_kind == Kind::Null || subject.m_kind == Kind::Function;
             if (plain_other || (subject.m_kind == Kind::Named && subject.m_name != enum_name)) {
-                m_diag.error(match->m_subject->m_span, "match value has type '" + describe(subject) + "', but its arms name enum '" +
+                m_diag.error(subject_expr->m_span, "match value has type '" + describe(subject) + "', but its arms name enum '" +
                                                        name_of(enum_name) + "'");
             }
         }
 
         std::set<SymbolID> handled;
         bool wildcard_seen = false;
-        for (const MatchArm &arm: match->m_arms) {
+        for (const MatchArm &arm: arms) {
             if (wildcard_seen) {
                 m_diag.error(arm.m_span, "this arm can never run: an earlier '_' arm already matches everything");
                 continue;
             }
             if (arm.m_wildcard) {
                 wildcard_seen = true;
-                check_block_scoped(arm.m_body);
+                check_arm_body(arm);
                 continue;
             }
             if (arm.m_path.size() != 2) { // the parser already said so
-                check_block_scoped(arm.m_body);
+                check_arm_body(arm);
                 continue;
             }
 
@@ -897,7 +920,7 @@ namespace fool {
                     }
                 }
             }
-            check_block_scoped(arm.m_body);
+            check_arm_body(arm);
             pop_scope();
         }
 
@@ -908,9 +931,34 @@ namespace fool {
                 missing += (missing.empty() ? "" : ", ") + name_of(enum_name) + "::" + name_of(variant.m_name);
             }
             if (!missing.empty()) {
-                m_diag.error(match->m_span, "match is not exhaustive: missing " + missing + " (or add a '_' arm)");
+                m_diag.error(match_span, "match is not exhaustive: missing " + missing + " (or add a '_' arm)");
             }
         }
+
+        if (value == nullptr) return;
+
+        // Expression form: the first arm with a known type (a plain value rather than `null`, a typed one rather than a
+        // literal) sets the type of the whole `match`, and every other arm must convert to it.
+        using Kind = StaticType::Kind;
+        const StaticType *result = nullptr;
+        for (const auto &entry: arm_types) {
+            const StaticType &type = entry.second;
+            if (!type.known() || type.m_kind == Kind::Null) continue;
+            if (result == nullptr || (result->m_literal && !type.m_literal)) result = &type;
+            if (!result->m_literal) break;
+        }
+        StaticType merged;
+        if (result != nullptr) {
+            merged = *result;
+            for (const auto &[node, type]: arm_types) {
+                if (!type.known() || &type == result) continue;
+                const std::string reason = conversion_error(merged, type);
+                if (!reason.empty()) m_diag.error(node->m_span, "the arms of a match give different types: " + reason);
+            }
+        } else if (!arm_types.empty() && arm_types.front().second.m_kind == Kind::Null) {
+            merged = arm_types.front().second;
+        }
+        m_expr_types[value] = merged;   // assign, not emplace: an earlier query may have cached 'unknown'
     }
 
     bool TypeCheckerPass2::always_returns(const std::vector<StmtNode *> &stmts) const {

@@ -1,0 +1,62 @@
+// `match` as an expression: every arm gives a value, and the arms agree on one type.
+
+module tests::match_expr_ok;
+
+enum Shape {
+    Circle(f64),
+    Rect(f64, f64),
+    Empty,
+}
+
+enum Mode {
+    Read,
+    Write,
+    Append,
+}
+
+fn area(shape: Shape) -> f64 {
+    return match shape {
+        Shape::Circle(r) => r * r * 3.0,
+        Shape::Rect(w, h) => w * h,
+        Shape::Empty => 0.0,
+    };
+}
+
+fn code(mode: Mode) -> i32 {
+    const c: i32 = match mode {
+        Mode::Read => 1,
+        Mode::Write => 2,
+        _ => 3
+    };
+    return c;
+}
+
+fn wider(shape: Shape) -> f64 {
+    // `_` ignores a payload value, and `_` as the last arm covers the rest
+    var w = match shape {
+        Shape::Rect(width, _) => width,
+        Shape::Circle(r) => r * 2.0,
+        _ => 0.0,
+    };
+    w = w + 1.0;
+    return w;
+}
+
+fn is_read(mode: Mode) -> bool {
+    return match mode {
+        Mode::Read => true,
+        _ => false,
+    };
+}
+
+fn twice(shape: Shape, mode: Mode) -> f64 {
+    // a match inside an arm, and a match as an operand
+    const scale = match mode {
+        Mode::Read => match shape {
+            Shape::Empty => 1.0,
+            _ => 2.0,
+        },
+        _ => 3.0,
+    };
+    return scale * area(shape) + match mode { Mode::Append => 1.0, _ => 0.0 };
+}

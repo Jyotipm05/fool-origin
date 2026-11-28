@@ -438,19 +438,21 @@ struct MatchBinding {
     SourceSpan m_span;
 };
 
-/// One arm of a `match`: `Enum::Variant` or `Enum::Variant(a, _, c)` or `_`, then `=>` and a block.
+/// One arm of a `match`: `Enum::Variant` or `Enum::Variant(a, _, c)` or `_`, then `=>` and a block (statement form)
+/// or an expression (expression form).
 struct MatchArm {
     // 1. Member variables
     std::vector<SymbolID> m_path;            ///< `Shape`, `Circle`; empty for the wildcard
     bool m_wildcard{false};
     bool m_has_bindings{false};              ///< parentheses were written (possibly empty)
     std::vector<MatchBinding> m_bindings;
-    BlockStmt* m_body{nullptr};
+    BlockStmt* m_body{nullptr};              ///< statement form
+    ExprNode* m_value{nullptr};              ///< expression form: the arm's result
     SourceSpan m_span;
 };
 
 /// `match value { Shape::Circle(r) => { ... } Shape::Empty => { ... } _ => { ... } }`: runs the first arm whose
-/// variant the value holds, with the payload bound to the arm's names. A statement, not an expression.
+/// variant the value holds, with the payload bound to the arm's names. A statement; see `MatchExpr` for the value form.
 class MatchStmt : public StmtNode {
 public:
     // 1. Member variables
@@ -459,6 +461,18 @@ public:
 
     // 2. Constructors
     MatchStmt() = default;
+};
+
+/// `const a = match shape { Shape::Circle(r) => r * 2.0, Shape::Empty => 0.0, _ => 1.0 };`: the value of the arm whose
+/// variant the subject holds. Every arm gives an expression (`m_value`) and the arms must agree on one type.
+class MatchExpr : public ExprNode {
+public:
+    // 1. Member variables
+    ExprNode* m_subject{nullptr};
+    std::vector<MatchArm> m_arms;
+
+    // 2. Constructors
+    MatchExpr() = default;
 };
 
 class BreakStmt : public StmtNode {};
@@ -735,6 +749,7 @@ struct EnumVariant {
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
     std::vector<TypeNode*> m_payload; ///< Ready(T) carries one payload type
+    ExprNode* m_value{nullptr};       ///< `Read = 2`: the explicit value (a constant integer); null takes the previous value + 1
     SourceSpan m_span;
 };
 
@@ -743,6 +758,7 @@ public:
     // 1. Member variables
     SymbolID m_name{INVALID_SYMBOL_ID};
     std::vector<GenericParam> m_type_params;
+    TypeNode* m_underlying{nullptr};   ///< `enum Mode: u8 { .. }`: the integer type of the variant values; null when not written
     std::vector<EnumVariant> m_variants;
 
     // 2. Constructors
